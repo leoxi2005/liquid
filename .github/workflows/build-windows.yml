@@ -16,13 +16,21 @@ permissions:
 
 jobs:
   windows:
-    runs-on: windows-latest
+    # windows-latest ships VS 2026 (v18) which older node-gyp can't detect —
+    # pin the VS2022 image and force a current node-gyp on top
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: Use latest node-gyp
+        shell: bash
+        run: |
+          npm install -g node-gyp@latest
+          echo "npm_config_node_gyp=$(npm root -g)/node-gyp/bin/node-gyp.js" >> "$GITHUB_ENV"
 
       # builds grandiose.node for win-x64 and downloads the NDI SDK DLL
       - name: Install dependencies (native build)
