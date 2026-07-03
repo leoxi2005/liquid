@@ -1,6 +1,6 @@
 {
   "name": "liquid",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "LIQUID — audio-reactive fluid simulation for live visuals",
   "main": "out/main/index.js",
   "author": "Le Minh Long",
@@ -9,7 +9,37 @@
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build:mac": "electron-vite build && electron-builder --mac",
+    "build:win": "electron-vite build && electron-builder --win"
+  },
+  "build": {
+    "appId": "com.leoxi.liquid",
+    "productName": "LIQUID",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "out/**/*",
+      "resources/icon.png",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "**/node_modules/@stagetimerio/grandiose/**"
+    ],
+    "npmRebuild": false,
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "identity": null,
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
+      ]
+    },
+    "win": {
+      "target": ["nsis"]
+    }
   },
   "dependencies": {
     "@stagetimerio/grandiose": "^0.2.0",
@@ -19,6 +49,7 @@
     "@tweakpane/core": "^2.0.5",
     "@types/node": "^22.10.0",
     "electron": "^33.2.0",
+    "electron-builder": "^25.1.8",
     "electron-vite": "^2.3.0",
     "typescript": "^5.7.0",
     "vite": "^5.4.11"

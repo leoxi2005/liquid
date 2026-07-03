@@ -14,13 +14,15 @@ async function main(): Promise<void> {
   const canvas = document.getElementById('c') as HTMLCanvasElement
 
   // --- canvas sizing: window-tracking or fixed render resolution (letterboxed)
+  let maxTex = 16384 // refined from the real GPU limit once GL is up
+  const clampDim = (v: number): number => Math.min(Math.max(256, Math.round(v)), maxTex)
   const targetSize = (): { w: number; h: number } | null => {
     const o = state.output
     switch (o.resolution) {
       case 'window':
         return null
       case 'custom':
-        return { w: Math.max(256, Math.round(o.customWidth)), h: Math.max(256, Math.round(o.customHeight)) }
+        return { w: clampDim(o.customWidth), h: clampDim(o.customHeight) }
       default: {
         const [w, h] = o.resolution.split('x').map(Number)
         return { w, h }
@@ -51,6 +53,7 @@ async function main(): Promise<void> {
   }
 
   const glc = getWebGLContext(canvas)
+  maxTex = glc.gl.getParameter(glc.gl.MAX_TEXTURE_SIZE) as number
   const solver = new FluidSolver(glc)
   const post = new PostChain(glc)
   const audio = new AudioEngine()

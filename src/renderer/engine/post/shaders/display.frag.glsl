@@ -129,10 +129,9 @@ void main () {
     c.b = texture(uTexture, vUv - gdir * texelSize * sep).b;
 #endif
     // granulation: pigment settles into the paper tooth unevenly.
-    // scaled by paperTexture (0 = perfectly smooth) and faded out in deep
-    // darks where speckle reads as dirt instead of texture
-    vec2 gp = vUv * vec2(aspect, 1.0);
-    float gran = vnoise(gp * 240.0) * 0.6 + vnoise(gp * 520.0) * 0.4;
+    // pixel-space noise — uv-space scaled with aspect and turned into
+    // per-pixel grit on ultra-wide outputs
+    float gran = vnoise(gl_FragCoord.xy * 0.22) * 0.6 + vnoise(gl_FragCoord.xy * 0.48) * 0.4;
     float dens = dot(c, vec3(0.3333));
     // the kick momentarily deepens every wash — the whole painting breathes
     float absorb = 3.2 + beatPulse * 1.6;

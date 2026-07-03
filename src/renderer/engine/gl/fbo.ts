@@ -100,12 +100,21 @@ export function createDoubleFBO(
   }
 }
 
-/** grid dimensions tracking canvas aspect; `resolution` sets the short side */
+/**
+ * Grid dimensions tracking canvas aspect; `resolution` sets the short side.
+ * The long side is capped (ultra-wide canvases would otherwise blow past GPU
+ * texture limits) — the short side shrinks to keep the aspect true.
+ */
 export function getResolution(gl: WebGL2RenderingContext, resolution: number): { width: number; height: number } {
+  const MAX_SIDE = 8192
   let aspect = gl.drawingBufferWidth / gl.drawingBufferHeight
   if (aspect < 1) aspect = 1 / aspect
-  const min = Math.round(resolution)
-  const max = Math.round(resolution * aspect)
+  let min = Math.round(resolution)
+  let max = Math.round(resolution * aspect)
+  if (max > MAX_SIDE) {
+    max = MAX_SIDE
+    min = Math.max(64, Math.round(MAX_SIDE / aspect))
+  }
   return gl.drawingBufferWidth > gl.drawingBufferHeight
     ? { width: max, height: min }
     : { width: min, height: max }
