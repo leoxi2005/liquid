@@ -86,7 +86,7 @@ export interface AudioParams {
   beatSensitivity: number
 }
 
-export type ModSource = 'none' | 'sub' | 'bass' | 'mid' | 'treble' | 'beat' | 'kick' | 'snare' | 'hat'
+export type ModSource = 'none' | 'sub' | 'bass' | 'mid' | 'treble' | 'beat' | 'kick' | 'snare' | 'hat' | 'energy'
 export type ModCurve = 'linear' | 'pow2' | 'sqrt'
 
 export interface Mapping {
@@ -103,6 +103,7 @@ export type MappableParam =
   | 'emitterSpeed'
   | 'hueShift'
   | 'bloomIntensity'
+  | 'simSpeed'
 
 export type Mappings = Record<MappableParam, Mapping>
 
@@ -235,7 +236,9 @@ export const defaultState: AppState = {
     curl: defaultMapping('none', 0.5),
     emitterSpeed: defaultMapping('mid', 0.5),
     hueShift: defaultMapping('treble', 0.25),
-    bloomIntensity: defaultMapping('kick', 0.4)
+    bloomIntensity: defaultMapping('kick', 0.4),
+    // quiet music → the fluid crawls; loud sections → it races
+    simSpeed: defaultMapping('energy', 1.2)
   },
   emitters: {
     // audio is the main motion source — no constant streams by default
@@ -303,6 +306,8 @@ export interface AudioLevels {
   kick: number
   snare: number
   hat: number
+  /** overall loudness — weighted band mix, smoothed */
+  energy: number
   /** alias of kick — kept for existing mappings */
   beat: number
   onKick: boolean

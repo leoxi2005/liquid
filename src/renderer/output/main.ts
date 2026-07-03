@@ -61,7 +61,7 @@ async function main(): Promise<void> {
   let framebuffersDirty = false
   let levels: AudioLevels = {
     sub: 0, bass: 0, mid: 0, treble: 0,
-    kick: 0, snare: 0, hat: 0, beat: 0,
+    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0,
     onKick: false, onSnare: false, onHat: false, onBeat: false
   }
 
@@ -211,7 +211,7 @@ async function main(): Promise<void> {
 
   // --- in-window control panel ---------------------------------------------------
   const stats = { fps: 0 }
-  const meters = { sub: 0, bass: 0, mid: 0, treble: 0, kick: 0, snare: 0, hat: 0 }
+  const meters = { sub: 0, bass: 0, mid: 0, treble: 0, kick: 0, snare: 0, hat: 0, energy: 0 }
   const panel = buildPanel({
     state,
     stats,
@@ -345,6 +345,7 @@ async function main(): Promise<void> {
     meters.kick = levels.kick
     meters.snare = levels.snare
     meters.hat = levels.hat
+    meters.energy = levels.energy
 
     // audio-modulated effective params for this frame
     const effSplatForce = state.sim.splatForce * modMult('splatForce')
@@ -373,8 +374,15 @@ async function main(): Promise<void> {
         color: paletteColor,
         audioActive: state.audio.source !== 'none'
       })
-      // global speed scale — slow, ink-on-paper motion without weakening forces
-      solver.step(dt * state.sim.speed, effSim)
+      // global speed scale — slow, ink-on-paper motion without weakening forces.
+      // simSpeed mapping couples tempo to loudness: quiet passages crawl
+      // (×0.3 floor), loud sections race past baseline
+      const speedMap = state.mappings.simSpeed
+      const audioSpeedMult =
+        state.audio.source !== 'none' && speedMap.source !== 'none'
+          ? 0.3 + modLevel(speedMap)
+          : 1
+      solver.step(dt * state.sim.speed * audioSpeedMult, effSim)
     }
 
     const pal = getPalette(state.visual.palette)

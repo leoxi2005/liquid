@@ -58,7 +58,7 @@ export class AudioEngine {
 
   readonly levels: AudioLevels = {
     sub: 0, bass: 0, mid: 0, treble: 0,
-    kick: 0, snare: 0, hat: 0, beat: 0,
+    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0,
     onKick: false, onSnare: false, onHat: false, onBeat: false
   }
 
@@ -279,6 +279,7 @@ export class AudioEngine {
         o.level = this.follow(o.level, 0, { attackMs: 1, releaseMs: DRUMS[key].releaseMs }, dt)
         l[key] = o.level
       }
+      l.energy = 0.25 * l.sub + 0.35 * l.bass + 0.25 * l.mid + 0.15 * l.treble
       l.beat = l.kick
       return l
     }
@@ -301,6 +302,8 @@ export class AudioEngine {
     l.onKick = this.onsets.kick.fired
     l.onSnare = this.onsets.snare.fired
     l.onHat = this.onsets.hat.fired
+    // bass-weighted loudness: drives the global sim-speed coupling
+    l.energy = 0.25 * l.sub + 0.35 * l.bass + 0.25 * l.mid + 0.15 * l.treble
     l.beat = l.kick
     l.onBeat = l.onKick
     return l

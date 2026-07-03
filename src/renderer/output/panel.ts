@@ -11,7 +11,7 @@ import { PALETTES } from '../../shared/palettes'
 export interface PanelEnv {
   state: AppState
   stats: { fps: number }
-  meters: { sub: number; bass: number; mid: number; treble: number; kick: number; snare: number; hat: number }
+  meters: { sub: number; bass: number; mid: number; treble: number; kick: number; snare: number; hat: number; energy: number }
   randomSplats(): void
   clearDye(): void
   toggleFullscreen(): void
@@ -195,7 +195,7 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   }
 
   const fMeters = fAudio.addFolder({ title: 'Levels', expanded: false })
-  for (const key of ['sub', 'bass', 'mid', 'treble', 'kick', 'snare', 'hat'] as const) {
+  for (const key of ['sub', 'bass', 'mid', 'treble', 'kick', 'snare', 'hat', 'energy'] as const) {
     fMeters.addBinding(env.meters, key, { readonly: true, view: 'graph', min: 0, max: 1, interval: 50 })
   }
 
@@ -203,10 +203,11 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   const fMap = pane.addFolder({ title: 'Audio Mapping', expanded: false })
   const sourceOptions = {
     none: 'none', sub: 'sub', bass: 'bass', mid: 'mid', treble: 'treble',
-    kick: 'kick', snare: 'snare', hat: 'hat'
+    kick: 'kick', snare: 'snare', hat: 'hat', energy: 'energy'
   }
   const curveOptions = { linear: 'linear', 'pow²': 'pow2', '√': 'sqrt' }
   const mappingLabels: Record<MappableParam, string> = {
+    simSpeed: 'sim speed ← energy',
     splatForce: 'splat force',
     splatRadius: 'splat radius',
     curl: 'curl',
