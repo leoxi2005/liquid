@@ -42,8 +42,9 @@ jobs:
       - name: Verify NDI module loads
         run: node -e "const g = require('@stagetimerio/grandiose'); console.log('grandiose OK:', typeof g.send)"
 
+      # --publish never: we upload to the release ourselves below
       - name: Build app
-        run: npm run build:win
+        run: npm run build:win -- --publish never
 
       - uses: actions/upload-artifact@v4
         with:
