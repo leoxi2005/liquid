@@ -18,5 +18,8 @@ void main () {
     vec2 muv = vec2(mirror > 0.5 ? 1.0 - vUv.x : vUv.x, 1.0 - vUv.y);
     float m = texture(uMask, muv).r;
     vec3 base = texture(uTarget, vUv).xyz;
-    fragColor = vec4(clamp(base + m * color, vec3(-clampValue), vec3(clampValue)), 1.0);
+    // soft ceiling: emission fades as local dye approaches saturation, so a
+    // standing body reaches a visible equilibrium instead of burning to black
+    float headroom = max(0.0, 1.0 - dot(base, vec3(0.3333)) / 1.0);
+    fragColor = vec4(clamp(base + m * color * headroom, vec3(-clampValue), vec3(clampValue)), 1.0);
 }

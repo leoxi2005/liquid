@@ -105,12 +105,21 @@ export class CameraFlow {
     if (!this.bg) this.bg = cur.slice()
     const bg = this.bg
     const mask = this.mask
+    let bodyPixels = 0
     for (let i = 0; i < cur.length; i++) {
       const diff = Math.abs(cur[i] - bg[i])
       const body = diff > 0.11
+      if (body) bodyPixels++
       mask[i] = body ? Math.min(255, ((diff - 0.11) * 1400) | 0) : 0
       // empty scene absorbs fast; a standing person absorbs very slowly
       bg[i] += (cur[i] - bg[i]) * (body ? 0.0025 : 0.03)
+    }
+    // >60% "body" = exposure/lighting jump, not a person — relearn, don't paint
+    if (bodyPixels > cur.length * 0.6) {
+      for (let i = 0; i < cur.length; i++) {
+        bg[i] += (cur[i] - bg[i]) * 0.5
+        mask[i] = 0
+      }
     }
 
     if (!this.prev) {

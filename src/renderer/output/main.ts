@@ -451,9 +451,10 @@ async function main(): Promise<void> {
         gl.bindTexture(gl.TEXTURE_2D, maskTex)
         gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
         gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CAM_W, CAM_H, gl.RED, gl.UNSIGNED_BYTE, camera.mask)
-        // emission is per-frame → scale by dt so it's framerate-independent
+        // dt-scaled and deliberately gentle — emission must stay below what
+        // dissipation clears per second or the canvas slowly saturates black
         const c = paletteColor(1)
-        const k = cam.silhouette * dt * 3.5
+        const k = cam.silhouette * dt * 0.55
         solver.splatMask(maskTex, [c[0] * k, c[1] * k, c[2] * k], cam.mirror)
       }
 
