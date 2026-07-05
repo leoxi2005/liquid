@@ -210,7 +210,7 @@ export const defaultState: AppState = {
     pressureIterations: 24,
     curl: 14,
     splatRadius: 0.32,
-    splatForce: 3500,
+    splatForce: 12000,
     maccormack: true
   },
   visual: {

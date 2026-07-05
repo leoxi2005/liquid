@@ -1,6 +1,6 @@
 {
   "name": "liquid",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "LIQUID — audio-reactive fluid simulation for live visuals",
   "main": "out/main/index.js",
   "author": "Le Minh Long",
@@ -33,12 +33,24 @@
       "category": "public.app-category.graphics-design",
       "identity": null,
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "zip", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
       ]
     },
     "win": {
-      "target": ["nsis"]
+      "target": [
+        "nsis"
+      ]
     }
   },
   "dependencies": {
