@@ -192,7 +192,8 @@ void main () {
     float flowAng = atan(vel.y, vel.x);
     float flowSpd = length(vel);
     c = hueRotate(c, flowAng);
-    c *= 1.0 + min(flowSpd * 0.003, 0.5);
+    // barely-there speed-glow — anything more blows the busy center to white
+    c *= 1.0 + min(flowSpd * 0.001, 0.1);
 #endif
 #ifdef SMOKE
     float smokeLum = dot(c, vec3(0.299, 0.587, 0.114));
