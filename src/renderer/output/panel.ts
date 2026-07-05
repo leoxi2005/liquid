@@ -298,6 +298,10 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   bind(fFloor, floor, 'enabled', ['output', 'floor'], { label: 'floor output' })
   bind(fFloor, floor, 'width', ['output', 'floor'], { label: 'floor W', min: 256, max: 16384, step: 2 })
   bind(fFloor, floor, 'height', ['output', 'floor'], { label: 'floor H', min: 256, max: 16384, step: 2 })
+  bind(fFloor, floor, 'ndiScale', ['output', 'floor'], {
+    label: 'NDI res (nhẹ máy)',
+    options: { '100%': 1, '50% (khuyên dùng)': 0.5, '25%': 0.25 }
+  })
   bind(fFloor, floor, 'preview', ['output', 'floor'], { label: 'preview (góc dưới phải)' })
 
   const ndiInfo = { status: '—' }

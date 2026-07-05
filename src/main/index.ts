@@ -72,6 +72,11 @@ app.on('window-all-closed', () => app.quit())
 
 ipcMain.handle(IPC.stateGet, () => state)
 
+// perf triage from a terminal: LIQUID_LOG_FPS=1 <binary> prints the render rate
+ipcMain.on(IPC.fpsReport, (_e, fps: number) => {
+  if (process.env.LIQUID_LOG_FPS) console.log('[fps]', fps)
+})
+
 ipcMain.on(IPC.statePatch, (event, patch: StatePatch) => {
   state = deepMerge(state, patch)
   persist.scheduleSaveSettings(() => state)

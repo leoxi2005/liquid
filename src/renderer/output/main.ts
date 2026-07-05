@@ -223,9 +223,49 @@ async function main(): Promise<void> {
   // without the busy latch the in-flight calls interleave into a start/stop loop
   const ndiRunning = { main: false, floor: false }
   let ndiBusy = false
-  let ndiPixels: Uint8Array<ArrayBuffer> | null = null
-  let ndiFloorPixels: Uint8Array<ArrayBuffer> | null = null
   let ndiFrameCount = 0
+
+  // Async GPU→CPU readback via PBO, one frame late: a synchronous readPixels
+  // stalls the whole pipeline waiting for the GPU (9fps on an M4 Max with the
+  // floor feed live). Queue the read this tick, collect it next tick.
+  interface NdiReader {
+    pbo: WebGLBuffer
+    size: number
+    pending: { w: number; h: number } | null
+    pixels: Uint8Array<ArrayBuffer> | null
+  }
+  const makeReader = (): NdiReader => ({ pbo: glc.gl.createBuffer()!, size: 0, pending: null, pixels: null })
+  const ndiMainReader = makeReader()
+  const ndiFloorReader = makeReader()
+
+  /** collect last tick's queued read (data is ready by now) and ship it */
+  const pumpReader = (reader: NdiReader, name: string): void => {
+    if (!reader.pending) return
+    const gl = glc.gl
+    const { w, h } = reader.pending
+    reader.pending = null
+    const bytes = w * h * 4
+    if (!reader.pixels || reader.pixels.length !== bytes) reader.pixels = new Uint8Array(bytes)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, reader.pbo)
+    gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, reader.pixels)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+    window.liquid.ndiFrame({ name, width: w, height: h, fps: state.output.ndiFps, packed: true }, reader.pixels)
+  }
+
+  /** kick off an async read of `fbo` into the reader's PBO — no CPU wait */
+  const queueRead = (reader: NdiReader, fbo: FBO): void => {
+    const gl = glc.gl
+    const bytes = fbo.width * fbo.height * 4
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fbo)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, reader.pbo)
+    if (reader.size !== bytes) {
+      gl.bufferData(gl.PIXEL_PACK_BUFFER, bytes, gl.STREAM_READ)
+      reader.size = bytes
+    }
+    gl.readPixels(0, 0, fbo.width, fbo.height, gl.RGBA, gl.UNSIGNED_BYTE, 0)
+    gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
+    reader.pending = { w: fbo.width, h: fbo.height }
+  }
 
   async function syncNdi(): Promise<void> {
     if (ndiBusy) return
@@ -280,32 +320,26 @@ async function main(): Promise<void> {
   }
 
   const captureNdiFrames = (): void => {
-    const gl = glc.gl
     // divide the 60Hz loop down to the requested NDI rate
     const divider = Math.max(1, Math.round(60 / Math.max(1, state.output.ndiFps)))
     ndiFrameCount++
     if (ndiFrameCount % divider !== 0) return
+    // ship what finished cooking last tick, then queue this tick's frame
+    pumpReader(ndiMainReader, NDI_SENDER_NAME)
+    pumpReader(ndiFloorReader, NDI_FLOOR_NAME)
     if (ndiRunning.main && state.output.ndi && ndiSceneFbo) {
       ndiPackFbo = ensureByteFbo(ndiPackFbo, ndiSceneFbo.width, ndiSceneFbo.height)
       drawTex(ndiPackProgram, ndiSceneFbo, ndiPackFbo) // GPU flip + BGRA
-      const bytes = ndiPackFbo.width * ndiPackFbo.height * 4
-      if (!ndiPixels || ndiPixels.length !== bytes) ndiPixels = new Uint8Array(bytes)
-      gl.readPixels(0, 0, ndiPackFbo.width, ndiPackFbo.height, gl.RGBA, gl.UNSIGNED_BYTE, ndiPixels)
-      window.liquid.ndiFrame(
-        { name: NDI_SENDER_NAME, width: ndiPackFbo.width, height: ndiPackFbo.height, fps: state.output.ndiFps, packed: true },
-        ndiPixels
-      )
+      queueRead(ndiMainReader, ndiPackFbo)
     }
     if (ndiRunning.floor && state.output.floor.enabled && floorTarget) {
-      floorPackFbo = ensureByteFbo(floorPackFbo, floorTarget.width, floorTarget.height)
+      // the pack pass doubles as the downscale — LINEAR sampling, one draw
+      const scale = Math.min(Math.max(state.output.floor.ndiScale || 1, 0.25), 1)
+      const fw = Math.max(2, Math.round((floorTarget.width * scale) / 2) * 2)
+      const fh = Math.max(2, Math.round((floorTarget.height * scale) / 2) * 2)
+      floorPackFbo = ensureByteFbo(floorPackFbo, fw, fh)
       drawTex(ndiPackProgram, floorTarget, floorPackFbo)
-      const bytes = floorPackFbo.width * floorPackFbo.height * 4
-      if (!ndiFloorPixels || ndiFloorPixels.length !== bytes) ndiFloorPixels = new Uint8Array(bytes)
-      gl.readPixels(0, 0, floorPackFbo.width, floorPackFbo.height, gl.RGBA, gl.UNSIGNED_BYTE, ndiFloorPixels)
-      window.liquid.ndiFrame(
-        { name: NDI_FLOOR_NAME, width: floorPackFbo.width, height: floorPackFbo.height, fps: state.output.ndiFps, packed: true },
-        ndiFloorPixels
-      )
+      queueRead(ndiFloorReader, floorPackFbo)
     }
   }
 
@@ -671,6 +705,7 @@ async function main(): Promise<void> {
       stats.fps = Math.round(fpsFrames / fpsAccum)
       fpsAccum = 0
       fpsFrames = 0
+      window.liquid.reportFps(stats.fps) // main logs it when LIQUID_LOG_FPS=1
     }
 
     if (recState.active) {

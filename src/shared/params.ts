@@ -162,6 +162,12 @@ export interface FloorParams {
   height: number
   /** where the floor attaches along the wall's width (0 = left, 0.5 = center) */
   offsetX: number
+  /**
+   * NDI feed resolution scale. Full-res floor readback (30MB/frame) is the
+   * single biggest frame-time cost in the app; at 0.5 the receiver upscales
+   * and a far-viewed LED floor looks identical
+   */
+  ndiScale: number
   /** inset preview of the floor feed in the main window (shows up in recordings) */
   preview: boolean
 }
@@ -275,13 +281,15 @@ export const defaultState: AppState = {
     customWidth: 2836,
     customHeight: 1080,
     ndi: false,
-    ndiFps: 60,
+    // 30 = full-load 60fps render on the reference M4 Max; 60 costs ~1/3 of it
+    ndiFps: 30,
     crossfadeSec: 1.2,
     floor: {
       enabled: true,
       width: 2836,
       height: 2660,
       offsetX: 0.5,
+      ndiScale: 0.5,
       preview: true
     }
   }
