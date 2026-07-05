@@ -146,6 +146,7 @@ export class PostChain {
     gl.uniform2f(u.texelSize, 1 / w, 1 / h)
     gl.uniform2f(u.uvOffset, uvRect.x, uvRect.y)
     gl.uniform2f(u.uvScale, uvRect.w, uvRect.h)
+    gl.uniform2f(u.dyeTexel, dye.texelSizeX, dye.texelSizeY)
     gl.uniform1i(u.uTexture, dye.attach(0))
     gl.uniform1f(u.aspect, w / h)
     gl.uniform3f(u.bgColor, env.bgColor[0], env.bgColor[1], env.bgColor[2])

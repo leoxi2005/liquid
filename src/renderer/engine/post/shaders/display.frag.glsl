@@ -39,6 +39,8 @@ uniform float beatPulse;
 // view window into the dye field — wall/floor are crops of one shared sim
 uniform vec2 uvOffset;
 uniform vec2 uvScale;
+// one texel of the dye texture — the floor for gradient steps below
+uniform vec2 dyeTexel;
 
 #ifdef BLOOM
 uniform sampler2D uBloom;
@@ -98,9 +100,10 @@ vec3 hueRotate (vec3 color, float angle) {
 
 void main () {
     // remap this view's uv into the shared dye field; one target pixel spans
-    // texelSize·uvScale in dye space, so neighbor taps scale the same way
+    // texelSize·uvScale in dye space. Never step less than one dye texel —
+    // sub-texel taps read bilinear seams as gradients → speckled grit on edges
     vec2 uv = uvOffset + vUv * uvScale;
-    vec2 dtex = texelSize * uvScale;
+    vec2 dtex = max(texelSize * uvScale, dyeTexel);
     vec2 uvL = uv - vec2(dtex.x, 0.0);
     vec2 uvR = uv + vec2(dtex.x, 0.0);
     vec2 uvT = uv + vec2(0.0, dtex.y);
