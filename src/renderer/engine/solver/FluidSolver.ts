@@ -9,7 +9,6 @@ import copyFragSrc from './shaders/copy.frag.glsl?raw'
 import clearFragSrc from './shaders/clear.frag.glsl?raw'
 import splatFragSrc from './shaders/splat.frag.glsl?raw'
 import advectionFragSrc from './shaders/advection.frag.glsl?raw'
-import maskSplatFragSrc from './shaders/maskSplat.frag.glsl?raw'
 import maccormackFragSrc from './shaders/maccormack.frag.glsl?raw'
 import curlFragSrc from './shaders/curl.frag.glsl?raw'
 import vorticityFragSrc from './shaders/vorticity.frag.glsl?raw'
@@ -25,7 +24,6 @@ export class FluidSolver {
   private copyProgram: Program
   private clearProgram: Program
   private splatProgram: Program
-  private maskSplatProgram: Program
   private advectionProgram: Program
   private maccormackProgram: Program
   private curlProgram: Program
@@ -42,6 +40,10 @@ export class FluidSolver {
   // scratch targets for MacCormack forward/backward estimates
   private dyeTemp1!: FBO
   private dyeTemp2!: FBO
+  // fixed output size (offscreen targets like the floor feed);
+  // null → follow the live drawing buffer, as the on-screen sim always did
+  private outW: number | null = null
+  private outH: number | null = null
 
   constructor(glc: GLContext) {
     this.gl = glc.gl
@@ -56,7 +58,6 @@ export class FluidSolver {
     this.copyProgram = frag(copyFragSrc)
     this.clearProgram = frag(clearFragSrc)
     this.splatProgram = frag(splatFragSrc)
-    this.maskSplatProgram = frag(maskSplatFragSrc)
     this.advectionProgram = frag(advectionFragSrc, filterKeywords)
     this.maccormackProgram = frag(maccormackFragSrc)
     this.curlProgram = frag(curlFragSrc)
@@ -78,11 +79,15 @@ export class FluidSolver {
     return this.velocity.read
   }
 
-  initFramebuffers(simResParam: number, dyeResParam: number): void {
+  initFramebuffers(simResParam: number, dyeResParam: number, outW?: number, outH?: number): void {
     const gl = this.gl
     const ext = this.ext
-    const simRes = getResolution(gl, simResParam)
-    const dyeRes = getResolution(gl, dyeResParam)
+    this.outW = outW ?? null
+    this.outH = outH ?? null
+    const refW = this.outW ?? gl.drawingBufferWidth
+    const refH = this.outH ?? gl.drawingBufferHeight
+    const simRes = getResolution(gl, simResParam, refW, refH)
+    const dyeRes = getResolution(gl, dyeResParam, refW, refH)
     const texType = ext.halfFloatTexType
     const rgba = ext.formatRGBA
     const rg = ext.formatRG
@@ -244,13 +249,18 @@ export class FluidSolver {
     this.dye.swap()
   }
 
+  /** output aspect this sim renders at (fixed for offscreen targets) */
+  private outAspect(): number {
+    return this.outW && this.outH ? this.outW / this.outH : this.gl.drawingBufferWidth / this.gl.drawingBufferHeight
+  }
+
   /** x/y in texcoords (0–1, y up), dx/dy velocity impulse, color dye RGB */
   splat(x: number, y: number, dx: number, dy: number, color: RGB, radiusParam: number): void {
     const gl = this.gl
     this.splatProgram.bind()
     gl.uniform2f(this.splatProgram.uniforms.texelSize, this.velocity.read.texelSizeX, this.velocity.read.texelSizeY)
     gl.uniform1i(this.splatProgram.uniforms.uTarget, this.velocity.read.attach(0))
-    gl.uniform1f(this.splatProgram.uniforms.aspectRatio, gl.drawingBufferWidth / gl.drawingBufferHeight)
+    gl.uniform1f(this.splatProgram.uniforms.aspectRatio, this.outAspect())
     gl.uniform2f(this.splatProgram.uniforms.point, x, y)
     gl.uniform3f(this.splatProgram.uniforms.color, dx, dy, 0)
     gl.uniform1f(this.splatProgram.uniforms.radius, this.correctRadius(radiusParam / 100))
@@ -261,22 +271,6 @@ export class FluidSolver {
     gl.uniform1i(this.splatProgram.uniforms.uTarget, this.dye.read.attach(0))
     gl.uniform3f(this.splatProgram.uniforms.color, color[0], color[1], color[2])
     gl.uniform1f(this.splatProgram.uniforms.clampValue, 1.3)
-    this.blit(this.dye.write)
-    this.dye.swap()
-  }
-
-  /** print a camera silhouette mask into the dye field */
-  splatMask(maskTex: WebGLTexture, color: RGB, mirror: boolean): void {
-    const gl = this.gl
-    this.maskSplatProgram.bind()
-    gl.uniform2f(this.maskSplatProgram.uniforms.texelSize, this.dye.read.texelSizeX, this.dye.read.texelSizeY)
-    gl.uniform1i(this.maskSplatProgram.uniforms.uTarget, this.dye.read.attach(0))
-    gl.activeTexture(gl.TEXTURE1)
-    gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.uniform1i(this.maskSplatProgram.uniforms.uMask, 1)
-    gl.uniform3f(this.maskSplatProgram.uniforms.color, color[0], color[1], color[2])
-    gl.uniform1f(this.maskSplatProgram.uniforms.mirror, mirror ? 1 : 0)
-    gl.uniform1f(this.maskSplatProgram.uniforms.clampValue, 1.3)
     this.blit(this.dye.write)
     this.dye.swap()
   }
@@ -302,7 +296,7 @@ export class FluidSolver {
   }
 
   private correctRadius(radius: number): number {
-    const aspect = this.gl.drawingBufferWidth / this.gl.drawingBufferHeight
+    const aspect = this.outAspect()
     return aspect > 1 ? radius * aspect : radius
   }
 }

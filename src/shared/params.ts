@@ -149,25 +149,17 @@ export interface EmitterParams {
   }
 }
 
-export interface CameraParams {
+export type ResolutionPreset = 'window' | '1280x720' | '1920x1080' | '2560x1080' | '3840x1080' | 'custom'
+
+/** second render target — LED floor fed over its own NDI sender */
+export interface FloorParams {
+  /** runs a second sim at the floor's aspect and streams it as NDI "LIQUID FLOOR" */
   enabled: boolean
-  /** getUserMedia video deviceId ('' = default camera) */
-  deviceId: string
-  /** how hard motion pushes the fluid */
-  force: number
-  /** 0–1: higher catches subtler movement */
-  sensitivity: number
-  /** dye per motion splat; 0 = invisible push only */
-  ink: number
-  /** silhouette dye emission — your body shape appears in the fluid */
-  silhouette: number
-  /** mirror horizontally — natural when facing the screen */
-  mirror: boolean
-  /** picture-in-picture of camera + detected mask — essential for setup */
+  width: number
+  height: number
+  /** inset preview of the floor feed in the main window (shows up in recordings) */
   preview: boolean
 }
-
-export type ResolutionPreset = 'window' | '1280x720' | '1920x1080' | '2560x1080' | '3840x1080' | 'custom'
 
 export interface OutputParams {
   /** render resolution — fixed presets letterbox inside the window */
@@ -179,13 +171,15 @@ export interface OutputParams {
   ndiFps: number
   /** preset switch fade time (seconds) */
   crossfadeSec: number
+  floor: FloorParams
 }
 
 export interface AppState {
+  /** bump when default tuning changes — old saved tuning is dropped on load */
+  tuningRev: number
   sim: SimParams
   visual: VisualParams
   audio: AudioParams
-  camera: CameraParams
   mappings: Mappings
   emitters: EmitterParams
   output: OutputParams
@@ -198,6 +192,7 @@ const defaultMapping = (source: ModSource, amount: number): Mapping => ({
 })
 
 export const defaultState: AppState = {
+  tuningRev: 2,
   sim: {
     paused: false,
     speed: 0.65,
@@ -247,17 +242,7 @@ export const defaultState: AppState = {
     bass: { attackMs: 15, releaseMs: 240 },
     mid: { attackMs: 25, releaseMs: 260 },
     treble: { attackMs: 12, releaseMs: 180 },
-    beatSensitivity: 1.4
-  },
-  camera: {
-    enabled: false,
-    deviceId: '',
-    force: 1200,
-    sensitivity: 0.6,
-    ink: 0.2,
-    silhouette: 0.55,
-    mirror: true,
-    preview: true
+    beatSensitivity: 1.15
   },
   mappings: {
     splatForce: defaultMapping('bass', 0.6),
@@ -272,10 +257,10 @@ export const defaultState: AppState = {
   emitters: {
     // audio is the main motion source — no constant streams by default
     orbit: { enabled: false, count: 2, radius: 0.25, speed: 0.06, force: 500 },
-    beatBurst: { enabled: true, count: 1, force: 1100 },
+    beatBurst: { enabled: true, count: 1, force: 2400 },
     // fluid pulse warps the whole flow into a standing vortex — off unless you want that
     pulse: { enabled: false, force: 600 },
-    snareSplash: { enabled: true, count: 1, force: 1400 },
+    snareSplash: { enabled: true, count: 2, force: 2400 },
     hatSparkle: { enabled: true, count: 2 },
     edgeFlow: { enabled: false, rate: 4, force: 1200 },
     idleDrip: { enabled: true }
@@ -286,7 +271,13 @@ export const defaultState: AppState = {
     customHeight: 1080,
     ndi: false,
     ndiFps: 60,
-    crossfadeSec: 1.2
+    crossfadeSec: 1.2,
+    floor: {
+      enabled: true,
+      width: 2836,
+      height: 2660,
+      preview: true
+    }
   }
 }
 
@@ -311,6 +302,7 @@ export interface PresetEntry {
 }
 
 export const NDI_SENDER_NAME = 'LIQUID'
+export const NDI_FLOOR_NAME = 'LIQUID FLOOR'
 
 export interface NdiFrameMeta {
   name: string
@@ -339,6 +331,8 @@ export interface AudioLevels {
   energy: number
   /** alias of kick — kept for existing mappings */
   beat: number
+  /** tempo-lock estimate from kick onsets; 0 = not locked */
+  bpm: number
   onKick: boolean
   onSnare: boolean
   onHat: boolean

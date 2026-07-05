@@ -11,7 +11,7 @@ import { PALETTES } from '../../shared/palettes'
 export interface PanelEnv {
   state: AppState
   stats: { fps: number }
-  meters: { sub: number; bass: number; mid: number; treble: number; kick: number; snare: number; hat: number; energy: number }
+  meters: { sub: number; bass: number; mid: number; treble: number; kick: number; snare: number; hat: number; energy: number; bpm: string }
   randomSplats(): void
   clearDye(): void
   toggleFullscreen(): void
@@ -190,6 +190,7 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   bind(fAudio, audio, 'monitor', ['audio'], { label: 'monitor (file/demo)' })
   bind(fAudio, audio, 'inputGain', ['audio'], { label: 'input gain', min: 0, max: 4, step: 0.05 })
   bind(fAudio, audio, 'beatSensitivity', ['audio'], { label: 'beat sensitivity', min: 0.5, max: 3, step: 0.05 })
+  fAudio.addBinding(env.meters, 'bpm', { readonly: true, label: 'BPM lock', interval: 500 })
 
   const fEnv = fAudio.addFolder({ title: 'Band envelopes', expanded: false })
   for (const band of ['sub', 'bass', 'mid', 'treble'] as const) {
@@ -202,37 +203,6 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   for (const key of ['sub', 'bass', 'mid', 'treble', 'kick', 'snare', 'hat', 'energy'] as const) {
     fMeters.addBinding(env.meters, key, { readonly: true, view: 'graph', min: 0, max: 1, interval: 50 })
   }
-
-  // --- camera interaction ---------------------------------------------------------------
-  const cam = state.camera as unknown as Record<string, unknown>
-  const fCam = pane.addFolder({ title: 'Camera (movement → fluid)' })
-  bind(fCam, cam, 'enabled', ['camera'], { label: 'enabled' })
-
-  let camDeviceBinding: BindingApi | null = null
-  const rebuildCamList = async (): Promise<void> => {
-    const options: Record<string, string> = { default: '' }
-    try {
-      const probe = await navigator.mediaDevices.getUserMedia({ video: true })
-      probe.getTracks().forEach((t) => t.stop())
-      const devices = await navigator.mediaDevices.enumerateDevices()
-      for (const d of devices) {
-        if (d.kind === 'videoinput') options[d.label || d.deviceId.slice(0, 8)] = d.deviceId
-      }
-    } catch {
-      // no permission yet — enabling the camera will trigger the prompt
-    }
-    camDeviceBinding?.dispose()
-    camDeviceBinding = bind(fCam, cam, 'deviceId', ['camera'], { label: 'camera', options })
-  }
-  void rebuildCamList()
-  fCam.addButton({ title: 'Rescan cameras' }).on('click', () => void rebuildCamList())
-
-  bind(fCam, cam, 'silhouette', ['camera'], { label: 'silhouette (hình người)', min: 0, max: 1, step: 0.01 })
-  bind(fCam, cam, 'force', ['camera'], { label: 'force', min: 0, max: 4000, step: 50 })
-  bind(fCam, cam, 'sensitivity', ['camera'], { label: 'sensitivity', min: 0, max: 1, step: 0.01 })
-  bind(fCam, cam, 'ink', ['camera'], { label: 'motion ink (0 = chỉ đẩy)', min: 0, max: 1, step: 0.01 })
-  bind(fCam, cam, 'mirror', ['camera'], { label: 'mirror' })
-  bind(fCam, cam, 'preview', ['camera'], { label: 'preview (góc trên trái)' })
 
   // --- mapping matrix ------------------------------------------------------------------
   const fMap = pane.addFolder({ title: 'Audio Mapping', expanded: false })
@@ -322,18 +292,28 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   bind(fOutput, output, 'ndiFps', ['output'], { label: 'NDI fps', options: { '60': 60, '30': 30 } })
   bind(fOutput, output, 'crossfadeSec', ['output'], { label: 'preset crossfade (s)', min: 0, max: 5, step: 0.1 })
 
+  // --- floor: second sim + its own NDI sender -------------------------------------------
+  const floor = state.output.floor as unknown as Record<string, unknown>
+  const fFloor = fOutput.addFolder({ title: 'Floor · NDI "LIQUID FLOOR"' })
+  bind(fFloor, floor, 'enabled', ['output', 'floor'], { label: 'floor output' })
+  bind(fFloor, floor, 'width', ['output', 'floor'], { label: 'floor W', min: 256, max: 16384, step: 2 })
+  bind(fFloor, floor, 'height', ['output', 'floor'], { label: 'floor H', min: 256, max: 16384, step: 2 })
+  bind(fFloor, floor, 'preview', ['output', 'floor'], { label: 'preview (góc dưới phải)' })
+
   const ndiInfo = { status: '—' }
-  fOutput.addBinding(ndiInfo, 'status', { readonly: true, label: 'NDI status', interval: 1000 })
+  fOutput.addBinding(ndiInfo, 'status', { readonly: true, label: 'NDI status', multiline: true, rows: 2, interval: 1000 })
   window.setInterval(() => {
     void window.liquid.ndiStatus().then((s) => {
       if (!s.available) {
         ndiInfo.status = `unavailable: ${s.loadError ?? 'no NDI runtime'}`
         return
       }
-      const e = s.senders[0]
-      ndiInfo.status = e
-        ? `● ${e.width}×${e.height} · ${e.frames}f / drop ${e.dropped}`
-        : 'sẵn sàng (đang tắt)'
+      ndiInfo.status =
+        s.senders.length === 0
+          ? 'sẵn sàng (đang tắt)'
+          : s.senders
+              .map((e) => `● ${e.name}: ${e.width}×${e.height} · ${e.frames}f / drop ${e.dropped}`)
+              .join('\n')
     })
   }, 2000)
 

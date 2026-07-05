@@ -56,26 +56,10 @@
       #hint.faded {
         opacity: 0;
       }
-      #campreview {
-        position: fixed;
-        left: 12px;
-        top: 12px;
-        width: 240px;
-        height: 136px;
-        z-index: 9;
-        border-radius: 6px;
-        border: 1px solid rgba(255, 255, 255, 0.25);
-        background: #000;
-        display: none;
-      }
-      #campreview.visible {
-        display: block;
-      }
     </style>
   </head>
   <body>
     <canvas id="c"></canvas>
-    <canvas id="campreview" width="240" height="136"></canvas>
     <div id="pane"></div>
     <div id="hint">Tab · panel &nbsp; F · fullscreen &nbsp; Space · pause &nbsp; R · splats &nbsp; C · clear &nbsp; kéo thả nhạc vào đây</div>
     <script type="module" src="./main.ts"></script>

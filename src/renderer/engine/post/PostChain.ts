@@ -80,9 +80,11 @@ export class PostChain {
     return this.ext.supportLinearFiltering
   }
 
-  initFramebuffers(): void {
+  initFramebuffers(refW?: number, refH?: number): void {
     const gl = this.gl
     const ext = this.ext
+    const rw = refW ?? gl.drawingBufferWidth
+    const rh = refH ?? gl.drawingBufferHeight
     const texType = ext.halfFloatTexType
     const rgba = ext.formatRGBA
     const r = ext.formatR
@@ -95,7 +97,7 @@ export class PostChain {
     this.sunrays?.dispose()
     this.sunraysTemp?.dispose()
 
-    const bloomRes = getResolution(gl, BLOOM_BASE_RES)
+    const bloomRes = getResolution(gl, BLOOM_BASE_RES, rw, rh)
     this.bloom = createFBO(gl, bloomRes.width, bloomRes.height, rgba.internalFormat, rgba.format, texType, filtering)
     for (let i = 0; i < BLOOM_MAX_MIPS; i++) {
       const width = bloomRes.width >> (i + 1)
@@ -104,13 +106,14 @@ export class PostChain {
       this.bloomMips.push(createFBO(gl, width, height, rgba.internalFormat, rgba.format, texType, filtering))
     }
 
-    const sunraysRes = getResolution(gl, SUNRAYS_RES)
+    const sunraysRes = getResolution(gl, SUNRAYS_RES, rw, rh)
     this.mask = createFBO(gl, sunraysRes.width, sunraysRes.height, r.internalFormat, r.format, texType, filtering)
     this.sunrays = createFBO(gl, sunraysRes.width, sunraysRes.height, r.internalFormat, r.format, texType, filtering)
     this.sunraysTemp = createFBO(gl, sunraysRes.width, sunraysRes.height, r.internalFormat, r.format, texType, filtering)
   }
 
-  render(dye: FBO, velocity: FBO, p: VisualParams, env: PostEnv): void {
+  /** target = null → the on-screen canvas; an FBO → offscreen feed (floor) */
+  render(dye: FBO, velocity: FBO, p: VisualParams, env: PostEnv, target: FBO | null = null): void {
     const gl = this.gl
     const paper = PAPER_STYLES.includes(env.style)
     const bloomOn = !paper && p.bloom && this.available && this.bloomMips.length > 0
@@ -128,8 +131,8 @@ export class PostChain {
     const u = this.displayMaterial.uniforms
 
     gl.disable(gl.BLEND)
-    const w = gl.drawingBufferWidth
-    const h = gl.drawingBufferHeight
+    const w = target ? target.width : gl.drawingBufferWidth
+    const h = target ? target.height : gl.drawingBufferHeight
     gl.uniform2f(u.texelSize, 1 / w, 1 / h)
     gl.uniform1i(u.uTexture, dye.attach(0))
     gl.uniform1f(u.aspect, w / h)
@@ -157,7 +160,7 @@ export class PostChain {
     if (env.style === 'flow') {
       gl.uniform1i(u.uVelocity, velocity.attach(3))
     }
-    this.blit(null)
+    this.blit(target)
   }
 
   private applyBloom(source: FBO, p: VisualParams): void {

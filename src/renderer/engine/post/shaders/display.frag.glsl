@@ -94,17 +94,24 @@ vec3 hueRotate (vec3 color, float angle) {
 }
 
 void main () {
-    vec3 c = texture(uTexture, vUv).rgb;
+    // (a kick zoom-punch lived here once — it read as the screen stuttering.
+    // beat legibility comes from the sim-side kick boom instead.)
+    vec2 uv = vUv;
+    vec2 uvL = vL;
+    vec2 uvR = vR;
+    vec2 uvT = vT;
+    vec2 uvB = vB;
+    vec3 c = texture(uTexture, uv).rgb;
 
     vec2 rv = (vUv - 0.5) * vec2(aspect, 1.0);
     float radial = length(rv);
 
 #ifdef NEED_GRADIENT
     // density gradient → edge magnitude + fake normal light
-    vec3 lc = texture(uTexture, vL).rgb;
-    vec3 rc = texture(uTexture, vR).rgb;
-    vec3 tc = texture(uTexture, vT).rgb;
-    vec3 bc = texture(uTexture, vB).rgb;
+    vec3 lc = texture(uTexture, uvL).rgb;
+    vec3 rc = texture(uTexture, uvR).rgb;
+    vec3 tc = texture(uTexture, uvT).rgb;
+    vec3 bc = texture(uTexture, uvB).rgb;
     float dx = length(rc) - length(lc);
     float dy = length(tc) - length(bc);
     float edge = length(vec2(dx, dy));
@@ -125,18 +132,19 @@ void main () {
     // leaving the faint rainbow fringe real washes get as they dry
     float sep = smoothstep(0.02, 0.2, edge) * (0.6 + paperTexture * 1.2);
     vec2 gdir = edge > 1e-5 ? normalize(vec2(dx, dy)) : vec2(0.0);
-    c.r = texture(uTexture, vUv + gdir * texelSize * sep).r;
-    c.b = texture(uTexture, vUv - gdir * texelSize * sep).b;
+    c.r = texture(uTexture, uv + gdir * texelSize * sep).r;
+    c.b = texture(uTexture, uv - gdir * texelSize * sep).b;
 #endif
     // granulation: pigment settles into the paper tooth unevenly.
     // pixel-space noise — uv-space scaled with aspect and turned into
     // per-pixel grit on ultra-wide outputs
     float gran = vnoise(gl_FragCoord.xy * 0.22) * 0.6 + vnoise(gl_FragCoord.xy * 0.48) * 0.4;
     float dens = dot(c, vec3(0.3333));
-    // the kick momentarily deepens every wash — the whole painting breathes
-    float absorb = 3.2 + beatPulse * 1.6;
+    // constant absorption — a beat-driven pump here darkened the whole frame
+    // on every kick, which read as flicker rather than reactivity
+    float absorb = 3.2;
 #ifdef OIL
-    absorb = 4.4 + beatPulse * 1.8;
+    absorb = 4.4;
 #endif
     vec3 ink = exp(-c * absorb);
     float granMask = smoothstep(0.02, 0.3, dens) * (1.0 - smoothstep(0.5, 1.1, dens) * 0.8);
@@ -173,7 +181,7 @@ void main () {
 #else
     // --- additive: light on dark -------------------------------------------
 #ifdef FLOW
-    vec2 vel = texture(uVelocity, vUv).xy;
+    vec2 vel = texture(uVelocity, uv).xy;
     float flowAng = atan(vel.y, vel.x);
     float flowSpd = length(vel);
     c = hueRotate(c, flowAng);
@@ -198,12 +206,12 @@ void main () {
 #endif
 
 #ifdef SUNRAYS
-    float sr = texture(uSunrays, vUv).r;
+    float sr = texture(uSunrays, uv).r;
     c += sr * sunraysColor;
 #endif
 
 #ifdef BLOOM
-    c += texture(uBloom, vUv).rgb * bloomIntensity;
+    c += texture(uBloom, uv).rgb * bloomIntensity;
 #endif
 
     // background: gentle radial falloff keeps projector blacks from feeling dead
@@ -211,8 +219,8 @@ void main () {
     vec3 scene = bgColor * bgFall + c;
 
     scene *= 1.0 - vignette * smoothstep(0.45, 1.05, radial);
-    // kick → brief glow lift
-    scene *= exposure * (1.0 + beatPulse * 0.18);
+    // kick → the faintest glow lift; strong pumps read as flicker
+    scene *= exposure * (1.0 + beatPulse * 0.08);
     scene = aces(scene);
 #endif
 

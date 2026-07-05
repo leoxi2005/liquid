@@ -2,9 +2,12 @@ import { getWebGLContext } from '../engine/gl/context'
 import { FluidSolver } from '../engine/solver/FluidSolver'
 import { PostChain } from '../engine/post/PostChain'
 import { AudioEngine } from '../engine/audio/AudioEngine'
-import { CAM_H, CAM_W, CameraFlow } from '../engine/camera/CameraFlow'
 import { Emitters } from './emitters'
-import { NDI_SENDER_NAME, PAPER_STYLES, type AppState, type AudioLevels, type FluidStyle, type Mapping, type MappableParam, type PresetEntry } from '../../shared/params'
+import { compileShader, Program } from '../engine/gl/program'
+import { createFBO, type FBO } from '../engine/gl/fbo'
+import baseVertSrc from '../engine/solver/shaders/base.vert.glsl?raw'
+import copyFragSrc from '../engine/solver/shaders/copy.frag.glsl?raw'
+import { NDI_FLOOR_NAME, NDI_SENDER_NAME, PAPER_STYLES, type AppState, type AudioLevels, type FluidStyle, type Mapping, type MappableParam, type PresetEntry } from '../../shared/params'
 import { applyPatchInPlace } from '../../shared/merge'
 import { buildPanel } from './panel'
 import { PresetFader, snapshotPreset } from './presets'
@@ -58,62 +61,26 @@ async function main(): Promise<void> {
   const solver = new FluidSolver(glc)
   const post = new PostChain(glc)
   const audio = new AudioEngine()
-  const camera = new CameraFlow()
   const emitters = new Emitters()
 
-  // silhouette mask texture (updated from the camera's CPU analysis each frame)
-  const maskTex = glc.gl.createTexture()
-  {
-    const gl = glc.gl
-    gl.activeTexture(gl.TEXTURE0)
-    gl.bindTexture(gl.TEXTURE_2D, maskTex)
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE)
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE)
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, CAM_W, CAM_H, 0, gl.RED, gl.UNSIGNED_BYTE, null)
-  }
-
-  // camera setup preview: live video + detected mask in red
-  const camPreview = document.getElementById('campreview') as HTMLCanvasElement
-  const camPreviewCtx = camPreview.getContext('2d')!
-  const maskCanvas = document.createElement('canvas')
-  maskCanvas.width = CAM_W
-  maskCanvas.height = CAM_H
-  const maskCtx = maskCanvas.getContext('2d')!
-  const maskImage = maskCtx.createImageData(CAM_W, CAM_H)
-
-  const drawCamPreview = (): void => {
-    const show = state.camera.enabled && state.camera.preview && camera.active
-    camPreview.classList.toggle('visible', show)
-    if (!show) return
-    const ctx = camPreviewCtx
-    ctx.save()
-    if (state.camera.mirror) {
-      ctx.translate(camPreview.width, 0)
-      ctx.scale(-1, 1)
-    }
-    ctx.drawImage(camera.videoEl, 0, 0, camPreview.width, camPreview.height)
-    const px = maskImage.data
-    for (let i = 0, j = 0; i < camera.mask.length; i++, j += 4) {
-      const m = camera.mask[i]
-      px[j] = 255
-      px[j + 1] = 40
-      px[j + 2] = 60
-      px[j + 3] = m > 0 ? 150 : 0
-    }
-    maskCtx.putImageData(maskImage, 0, 0)
-    ctx.drawImage(maskCanvas, 0, 0, camPreview.width, camPreview.height)
-    ctx.restore()
-  }
+  // --- floor feed: a second sim at the floor's own aspect, rendered offscreen ---
+  const floorSolver = new FluidSolver(glc)
+  const floorPost = new PostChain(glc)
+  const floorEmitters = new Emitters()
+  let floorTarget: FBO | null = null
+  // inset preview needs its own tiny textured draw (blit() always fills the viewport)
+  const previewProgram = new Program(
+    glc.gl,
+    compileShader(glc.gl, glc.gl.VERTEX_SHADER, baseVertSrc),
+    compileShader(glc.gl, glc.gl.FRAGMENT_SHADER, copyFragSrc)
+  )
 
   const state: AppState = await window.liquid.getState()
   resizeCanvas()
   let framebuffersDirty = false
   let levels: AudioLevels = {
     sub: 0, bass: 0, mid: 0, treble: 0,
-    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0,
+    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0, bpm: 0,
     onKick: false, onSnare: false, onHat: false, onBeat: false
   }
 
@@ -135,12 +102,19 @@ async function main(): Promise<void> {
   // scatters individual splats around it (1 = anywhere → watercolor variety).
   // strength ≈ ink amount 0–1. Paper styles store pigment absorption
   // (Beer–Lambert in the display shader), dark styles store emitted light.
-  const paletteColor = (strength: number): RGB => {
+  // `at` pins the palette position (per-drum color identity — kick/snare/hat
+  // each own a hue region so every mark is attributable to its sound)
+  const paletteColor = (strength: number, at?: number): RGB => {
     const pal = getPalette(state.visual.palette)
     const hueShift = modLevel(state.mappings.hueShift)
-    const center = pingPong(performance.now() * 0.001 * state.visual.colorCycleSpeed + hueShift)
-    const spread = state.visual.colorSpread
-    const t = center * (1 - spread) + Math.random() * spread
+    let t: number
+    if (at !== undefined) {
+      t = pingPong(at + (Math.random() - 0.5) * 0.1 + hueShift * 0.3)
+    } else {
+      const center = pingPong(performance.now() * 0.001 * state.visual.colorCycleSpeed + hueShift)
+      const spread = state.visual.colorSpread
+      t = center * (1 - spread) + Math.random() * spread
+    }
     const c = samplePalette(pal, t)
     // tonal variety: some splats are thin washes, some dense drops
     const amt = strength * (0.7 + Math.random() * 0.8)
@@ -185,70 +159,152 @@ async function main(): Promise<void> {
     }
     // all idempotent — they only act when config actually differs
     void audio.applyConfig(state.audio)
-    void camera.applyConfig(state.camera)
+    syncFloorTargets()
     void syncNdi()
+  }
+
+  // --- floor render target -------------------------------------------------------
+  // (re)create the FBO + second sim whenever the floor size changes; the solver
+  // and post chain are told the fixed output size so aspect stays true
+  let floorSplashed = false
+  const prevFloorSize = { w: 0, h: 0 }
+  function syncFloorTargets(): void {
+    const f = state.output.floor
+    if (!f.enabled) return
+    const gl = glc.gl
+    const w = clampDim(f.width)
+    const h = clampDim(f.height)
+    if (floorTarget && prevFloorSize.w === w && prevFloorSize.h === h) return
+    prevFloorSize.w = w
+    prevFloorSize.h = h
+    floorTarget?.dispose()
+    // plain byte RGBA — this is a video feed, readPixels wants UNSIGNED_BYTE
+    floorTarget = createFBO(gl, w, h, gl.RGBA8, gl.RGBA, gl.UNSIGNED_BYTE, gl.LINEAR)
+    floorSolver.initFramebuffers(state.sim.simRes, state.sim.dyeRes, w, h)
+    floorPost.initFramebuffers(w, h)
+    if (!floorSplashed) {
+      floorSplashed = true
+      floorSolver.multipleSplats(6, state.sim.splatRadius, () => paletteColor(0.55))
+    }
   }
 
   // --- NDI out ------------------------------------------------------------------
   // single-flight: syncNdi is polled every frame while start/stop are async —
   // without the busy latch the in-flight calls interleave into a start/stop loop
-  let ndiRunning = false
+  const ndiRunning = { main: false, floor: false }
   let ndiBusy = false
   let ndiPixels: Uint8Array<ArrayBuffer> | null = null
+  let ndiFloorPixels: Uint8Array<ArrayBuffer> | null = null
   let ndiFrameCount = 0
 
   async function syncNdi(): Promise<void> {
     if (ndiBusy) return
-    const want = state.output.ndi
-    if (want === ndiRunning) return
+    const wantMain = state.output.ndi
+    const wantFloor = state.output.floor.enabled
+    if (wantMain === ndiRunning.main && wantFloor === ndiRunning.floor) return
     ndiBusy = true
     try {
-      if (want) {
-        const res = await window.liquid.ndiStart({
-          name: NDI_SENDER_NAME,
-          width: canvas.width,
-          height: canvas.height,
-          fps: state.output.ndiFps
-        })
-        if (res.ok) {
-          ndiRunning = true
+      if (wantMain !== ndiRunning.main) {
+        if (wantMain) {
+          const res = await window.liquid.ndiStart({
+            name: NDI_SENDER_NAME,
+            width: canvas.width,
+            height: canvas.height,
+            fps: state.output.ndiFps
+          })
+          if (res.ok) {
+            ndiRunning.main = true
+          } else {
+            console.error('NDI start failed:', res.error)
+            state.output.ndi = false
+            window.liquid.patchState({ output: { ndi: false } })
+          }
         } else {
-          console.error('NDI start failed:', res.error)
-          state.output.ndi = false
-          window.liquid.patchState({ output: { ndi: false } })
+          await window.liquid.ndiStop(NDI_SENDER_NAME)
+          ndiRunning.main = false
         }
-      } else {
-        await window.liquid.ndiStop(NDI_SENDER_NAME)
-        ndiRunning = false
+      }
+      if (wantFloor !== ndiRunning.floor) {
+        if (wantFloor) {
+          const res = await window.liquid.ndiStart({
+            name: NDI_FLOOR_NAME,
+            width: clampDim(state.output.floor.width),
+            height: clampDim(state.output.floor.height),
+            fps: state.output.ndiFps
+          })
+          if (res.ok) {
+            ndiRunning.floor = true
+          } else {
+            console.error('NDI floor start failed:', res.error)
+            state.output.floor.enabled = false
+            window.liquid.patchState({ output: { floor: { enabled: false } } })
+          }
+        } else {
+          await window.liquid.ndiStop(NDI_FLOOR_NAME)
+          ndiRunning.floor = false
+        }
       }
     } finally {
       ndiBusy = false
     }
   }
 
-  const captureNdiFrame = (): void => {
+  const captureNdiFrames = (): void => {
     const gl = glc.gl
     // divide the 60Hz loop down to the requested NDI rate
     const divider = Math.max(1, Math.round(60 / Math.max(1, state.output.ndiFps)))
     ndiFrameCount++
     if (ndiFrameCount % divider !== 0) return
-    const bytes = canvas.width * canvas.height * 4
-    if (!ndiPixels || ndiPixels.length !== bytes) ndiPixels = new Uint8Array(bytes)
-    // read straight after the display pass, same rAF — buffer still valid
-    gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, ndiPixels)
-    window.liquid.ndiFrame(
-      { name: NDI_SENDER_NAME, width: canvas.width, height: canvas.height, fps: state.output.ndiFps },
-      ndiPixels
-    )
+    if (ndiRunning.main && state.output.ndi) {
+      const bytes = canvas.width * canvas.height * 4
+      if (!ndiPixels || ndiPixels.length !== bytes) ndiPixels = new Uint8Array(bytes)
+      // read straight after the display pass, same rAF — buffer still valid
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, ndiPixels)
+      window.liquid.ndiFrame(
+        { name: NDI_SENDER_NAME, width: canvas.width, height: canvas.height, fps: state.output.ndiFps },
+        ndiPixels
+      )
+    }
+    if (ndiRunning.floor && state.output.floor.enabled && floorTarget) {
+      const bytes = floorTarget.width * floorTarget.height * 4
+      if (!ndiFloorPixels || ndiFloorPixels.length !== bytes) ndiFloorPixels = new Uint8Array(bytes)
+      gl.bindFramebuffer(gl.FRAMEBUFFER, floorTarget.fbo)
+      gl.readPixels(0, 0, floorTarget.width, floorTarget.height, gl.RGBA, gl.UNSIGNED_BYTE, ndiFloorPixels)
+      window.liquid.ndiFrame(
+        { name: NDI_FLOOR_NAME, width: floorTarget.width, height: floorTarget.height, fps: state.output.ndiFps },
+        ndiFloorPixels
+      )
+    }
   }
+
+  // inset of the floor feed in a corner of the main window (drawn after the main
+  // NDI capture, so the NDI/preset feed stays clean — recordings do include it)
+  const drawFloorPreview = (): void => {
+    if (!floorTarget || !state.output.floor.enabled || !state.output.floor.preview) return
+    const gl = glc.gl
+    gl.disable(gl.BLEND)
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null)
+    const pw = Math.max(140, Math.round(canvas.width * 0.14))
+    const ph = Math.round((pw * floorTarget.height) / floorTarget.width)
+    gl.viewport(canvas.width - pw - 16, 16, pw, ph)
+    previewProgram.bind()
+    gl.uniform2f(previewProgram.uniforms.texelSize, 1 / pw, 1 / ph)
+    gl.uniform1i(previewProgram.uniforms.uTexture, floorTarget.attach(0))
+    gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0)
+  }
+
+  const floorOn = (): boolean => state.output.floor.enabled && floorTarget !== null
 
   window.liquid.onAction((action) => {
     switch (action.type) {
       case 'randomSplats':
         solver.multipleSplats(action.count, state.sim.splatRadius, () => paletteColor(0.7))
+        if (floorOn()) floorSolver.multipleSplats(action.count, state.sim.splatRadius, () => paletteColor(0.7))
         break
       case 'clearDye':
         solver.clearDye()
+        floorSolver.clearDye()
         break
     }
   })
@@ -313,13 +369,19 @@ async function main(): Promise<void> {
 
   // --- in-window control panel ---------------------------------------------------
   const stats = { fps: 0 }
-  const meters = { sub: 0, bass: 0, mid: 0, treble: 0, kick: 0, snare: 0, hat: 0, energy: 0 }
+  const meters = { sub: 0, bass: 0, mid: 0, treble: 0, kick: 0, snare: 0, hat: 0, energy: 0, bpm: '—' }
   const panel = buildPanel({
     state,
     stats,
     meters,
-    randomSplats: () => solver.multipleSplats(8, state.sim.splatRadius, () => paletteColor(0.7)),
-    clearDye: () => solver.clearDye(),
+    randomSplats: () => {
+      solver.multipleSplats(8, state.sim.splatRadius, () => paletteColor(0.7))
+      if (floorOn()) floorSolver.multipleSplats(8, state.sim.splatRadius, () => paletteColor(0.7))
+    },
+    clearDye: () => {
+      solver.clearDye()
+      floorSolver.clearDye()
+    },
     toggleFullscreen: () => window.liquid.sendAction({ type: 'toggleFullscreen' }),
     recording: recState,
     toggleRecording,
@@ -401,9 +463,11 @@ async function main(): Promise<void> {
         break
       case 'KeyR':
         solver.multipleSplats(8, state.sim.splatRadius, () => paletteColor(0.7))
+        if (floorOn()) floorSolver.multipleSplats(8, state.sim.splatRadius, () => paletteColor(0.7))
         break
       case 'KeyC':
         solver.clearDye()
+        floorSolver.clearDye()
         break
       default:
         // 1–9 → preset slots in list order, crossfaded
@@ -434,6 +498,8 @@ async function main(): Promise<void> {
       framebuffersDirty = false
       solver.initFramebuffers(state.sim.simRes, state.sim.dyeRes)
       post.initFramebuffers()
+      // floor sim shares simRes/dyeRes but keeps its own fixed aspect
+      if (floorTarget) floorSolver.initFramebuffers(state.sim.simRes, state.sim.dyeRes, floorTarget.width, floorTarget.height)
     }
 
     // preset crossfade: lerp state toward the target each frame
@@ -454,6 +520,7 @@ async function main(): Promise<void> {
     meters.snare = levels.snare
     meters.hat = levels.hat
     meters.energy = levels.energy
+    meters.bpm = levels.bpm > 0 ? `● ${levels.bpm.toFixed(1)} (locked)` : 'đang dò…'
 
     // audio-modulated effective params for this frame
     const effSplatForce = state.sim.splatForce * modMult('splatForce')
@@ -473,45 +540,7 @@ async function main(): Promise<void> {
       }
     }
 
-    // camera: silhouette prints into the dye, motion vectors shove it around
-    if (state.camera.enabled && camera.active && !state.sim.paused) {
-      const cam = state.camera
-      const vectors = camera.update(cam.sensitivity)
-
-      if (cam.silhouette > 0) {
-        const gl = glc.gl
-        gl.activeTexture(gl.TEXTURE0)
-        gl.bindTexture(gl.TEXTURE_2D, maskTex)
-        gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1)
-        gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, CAM_W, CAM_H, gl.RED, gl.UNSIGNED_BYTE, camera.mask)
-        // dt-scaled and deliberately gentle — emission must stay below what
-        // dissipation clears per second or the canvas slowly saturates black
-        const c = paletteColor(1)
-        const k = cam.silhouette * dt * 0.55
-        solver.splatMask(maskTex, [c[0] * k, c[1] * k, c[2] * k], cam.mirror)
-      }
-
-      for (const f of vectors) {
-        const px = cam.mirror ? 1 - f.x : f.x
-        const py = 1 - f.y // video y-down → texcoord y-up
-        const u = (cam.mirror ? -f.u : f.u) * cam.force
-        const v = -f.v * cam.force
-        const strength = Math.min(f.mag / 5, 1)
-        const color = cam.ink > 0 ? paletteColor(cam.ink * strength) : ([0, 0, 0] as RGB)
-        solver.splat(px, py, u, v, color, effSplatRadius * 0.7)
-      }
-    }
-    drawCamPreview()
-
     if (!state.sim.paused) {
-      emitters.update(dt, state.emitters, solver, {
-        levels,
-        speedMult: modMult('emitterSpeed'),
-        aspect,
-        splatRadius: effSplatRadius,
-        color: paletteColor,
-        audioActive: state.audio.source !== 'none'
-      })
       // global speed scale — slow, ink-on-paper motion without weakening forces.
       // simSpeed mapping couples tempo to loudness with heavy contrast:
       // silence ≈ frozen (×0.08 floor), pow-curve so loud sections visibly race
@@ -521,7 +550,29 @@ async function main(): Promise<void> {
         const lvl = Math.min(modLevel(speedMap), 1.3)
         audioSpeedMult = 0.08 + Math.pow(lvl, 1.7) * 2.3
       }
+
+      emitters.update(dt, state.emitters, solver, {
+        levels,
+        speedMult: modMult('emitterSpeed'),
+        aspect,
+        splatRadius: effSplatRadius,
+        color: paletteColor,
+        audioActive: state.audio.source !== 'none'
+      })
       solver.step(dt * state.sim.speed * audioSpeedMult, effSim)
+
+      // floor: same audio events / params, its own field at the floor's aspect
+      if (floorOn() && floorTarget) {
+        floorEmitters.update(dt, state.emitters, floorSolver, {
+          levels,
+          speedMult: modMult('emitterSpeed'),
+          aspect: floorTarget.width / floorTarget.height,
+          splatRadius: effSplatRadius,
+          color: paletteColor,
+          audioActive: state.audio.source !== 'none'
+        })
+        floorSolver.step(dt * state.sim.speed * audioSpeedMult, effSim)
+      }
     }
 
     const pal = getPalette(state.visual.palette)
@@ -532,22 +583,28 @@ async function main(): Promise<void> {
     if (paper !== prevPaper) {
       prevPaper = paper
       solver.clearDye()
+      floorSolver.clearDye()
     }
     // when the style disagrees with the palette's native mode, swap in a neutral bg
     const bgHex = paper
       ? (pal.mode === 'paper' ? pal.bg : '#f2efe6')
       : (pal.mode === 'dark' ? pal.bg : '#0b0d10')
     const sunraysTint = samplePalette(pal, 0.7)
-    post.render(solver.dyeRead, solver.velocityRead, state.visual, {
+    const postEnv = {
       time: nowSec,
       bgColor: hexToRgb(bgHex),
-      sunraysTint: [sunraysTint[0] * 0.35, sunraysTint[1] * 0.35, sunraysTint[2] * 0.35],
+      sunraysTint: [sunraysTint[0] * 0.35, sunraysTint[1] * 0.35, sunraysTint[2] * 0.35] as RGB,
       bloomIntensityMod: modMult('bloomIntensity'),
       style,
       beatPulse: levels.beat
-    })
+    }
+    if (floorOn() && floorTarget) {
+      floorPost.render(floorSolver.dyeRead, floorSolver.velocityRead, state.visual, postEnv, floorTarget)
+    }
+    post.render(solver.dyeRead, solver.velocityRead, state.visual, postEnv)
 
-    if (state.output.ndi && ndiRunning) captureNdiFrame()
+    if (ndiRunning.main || ndiRunning.floor) captureNdiFrames()
+    drawFloorPreview()
 
     fpsAccum += rawDt
     fpsFrames++

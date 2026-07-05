@@ -8,11 +8,20 @@ export interface EmitterEnv {
   speedMult: number
   aspect: number
   splatRadius: number
-  /** palette-sampled dye color; scale ≈ brightness per splat */
-  color: (scale: number) => RGB
+  /**
+   * palette-sampled dye color; scale ≈ brightness per splat.
+   * `at` pins the palette position (0–1) — each drum keeps its own color
+   * identity so the eye can attribute every mark to its sound
+   */
+  color: (scale: number, at?: number) => RGB
   /** true when an audio source is active — silences the idle drip */
   audioActive: boolean
 }
+
+// fixed palette homes: kick / snare / hat each own a hue region
+const KICK_AT = 0.12
+const SNARE_AT = 0.55
+const HAT_AT = 0.88
 
 export class Emitters {
   private orbitAngle = Math.random() * Math.PI * 2
@@ -38,13 +47,13 @@ export class Emitters {
   /** SNARE → call-and-response splash, alternating left / right anchor, streaking inward */
   private snareSplash(e: EmitterParams, solver: FluidSolver, env: EmitterEnv): void {
     this.snareSide = -this.snareSide
-    const strength = 0.6 + 0.6 * env.levels.snare
+    const strength = 0.7 + 0.7 * env.levels.snare
     for (let i = 0; i < e.snareSplash.count; i++) {
       const x = 0.5 + this.snareSide * 0.26 + (Math.random() - 0.5) * 0.05
-      const y = 0.5 + (Math.random() - 0.5) * 0.12
+      const y = 0.5 + (Math.random() - 0.5) * 0.16
       const dx = -this.snareSide * e.snareSplash.force * strength
       const dy = (Math.random() - 0.5) * e.snareSplash.force * 0.25
-      solver.splat(x, y, dx, dy, env.color(0.85), env.splatRadius * 0.9)
+      solver.splat(x, y, dx, dy, env.color(1.0, SNARE_AT), env.splatRadius * 1.1)
     }
   }
 
@@ -56,8 +65,8 @@ export class Emitters {
       this.hatStep = (this.hatStep + 1) % 8
       const x = 0.16 + (this.hatStep / 7) * 0.68
       const y = 0.82
-      const f = 140 + env.levels.hat * 160
-      solver.splat(x, y, 0, -f, env.color(0.4), env.splatRadius * 0.35)
+      const f = 300 + env.levels.hat * 300
+      solver.splat(x, y, 0, -f, env.color(0.55, HAT_AT), env.splatRadius * 0.4)
     }
   }
 
@@ -100,9 +109,9 @@ export class Emitters {
     }
   }
 
-  /** KICK → one big boom anchored at center, size follows hit strength */
+  /** KICK → center boom: dense core + petals thrown outward, size follows hit strength */
   private beatBurst(e: EmitterParams, solver: FluidSolver, env: EmitterEnv): void {
-    const strength = 0.6 + 0.8 * env.levels.beat
+    const strength = 0.7 + 1.0 * env.levels.beat
     for (let i = 0; i < e.beatBurst.count; i++) {
       const x = 0.5 + (Math.random() - 0.5) * 0.08
       const y = 0.5 + (Math.random() - 0.5) * 0.08
@@ -111,8 +120,20 @@ export class Emitters {
       const dy = Math.sin(ang) * e.beatBurst.force * strength
       // dense core + thin halo wash — one drop, two tonal layers.
       // radius scales with the hit: soft kicks whisper, hard kicks boom
-      solver.splat(x, y, dx, dy, env.color(0.75), env.splatRadius * (1.2 + env.levels.beat * 0.9))
-      solver.splat(x, y, dx * 0.2, dy * 0.2, env.color(0.08), env.splatRadius * 2.6)
+      solver.splat(x, y, dx, dy, env.color(0.9, KICK_AT), env.splatRadius * (1.6 + env.levels.beat * 1.4))
+      solver.splat(x, y, dx * 0.2, dy * 0.2, env.color(0.1, KICK_AT), env.splatRadius * 3.0)
+      // petals: dye thrown radially so the hit reads as an explosion, not a dot.
+      // random phase each kick — a fixed geometry repeated on the 4-on-floor
+      // builds standing circulation that sucks everything into a center blob
+      const petals = 6
+      const phase = Math.random() * Math.PI * 2
+      for (let k = 0; k < petals; k++) {
+        const pa = phase + (k * Math.PI * 2) / petals
+        const px = x + (Math.cos(pa) * 0.05) / env.aspect
+        const py = y + Math.sin(pa) * 0.05
+        const pf = e.beatBurst.force * strength * 0.45
+        solver.splat(px, py, Math.cos(pa) * pf, Math.sin(pa) * pf, env.color(0.3, KICK_AT), env.splatRadius * 0.6)
+      }
     }
   }
 

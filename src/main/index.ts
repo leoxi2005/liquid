@@ -17,8 +17,17 @@ let outputWin: BrowserWindow | null = null
 
 app.whenReady().then(() => {
   // restore last session's settings — never restore paused
-  const saved = persist.loadSettings()
+  const saved = persist.loadSettings() as Record<string, unknown> | null
   if (saved) {
+    delete saved.camera // feature removed — stale key would linger in settings.json
+    // reactivity retune: saved emitter/mapping values from an older rev would
+    // silently override the new (much stronger) defaults
+    if ((saved.tuningRev as number | undefined) !== defaultState.tuningRev) {
+      delete saved.emitters
+      delete saved.mappings
+      if (saved.audio) delete (saved.audio as Record<string, unknown>).beatSensitivity
+      saved.tuningRev = defaultState.tuningRev
+    }
     state = deepMerge(state, saved as StatePatch)
     state.sim.paused = false
   }

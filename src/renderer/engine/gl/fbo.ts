@@ -105,9 +105,14 @@ export function createDoubleFBO(
  * The long side is capped (ultra-wide canvases would otherwise blow past GPU
  * texture limits) — the short side shrinks to keep the aspect true.
  */
-export function getResolution(gl: WebGL2RenderingContext, resolution: number): { width: number; height: number } {
+export function getResolution(
+  gl: WebGL2RenderingContext,
+  resolution: number,
+  refW = gl.drawingBufferWidth,
+  refH = gl.drawingBufferHeight
+): { width: number; height: number } {
   const MAX_SIDE = 8192
-  let aspect = gl.drawingBufferWidth / gl.drawingBufferHeight
+  let aspect = refW / refH
   if (aspect < 1) aspect = 1 / aspect
   let min = Math.round(resolution)
   let max = Math.round(resolution * aspect)
@@ -115,9 +120,7 @@ export function getResolution(gl: WebGL2RenderingContext, resolution: number): {
     max = MAX_SIDE
     min = Math.max(64, Math.round(MAX_SIDE / aspect))
   }
-  return gl.drawingBufferWidth > gl.drawingBufferHeight
-    ? { width: max, height: min }
-    : { width: min, height: max }
+  return refW > refH ? { width: max, height: min } : { width: min, height: max }
 }
 
 export type BlitFn = (target: FBO | null, clear?: boolean) => void

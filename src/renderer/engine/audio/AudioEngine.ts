@@ -8,21 +8,24 @@ const BANDS = {
   treble: [4000, 14000]
 } as const
 
-const FLUX_HISTORY = 60
+const FLUX_HISTORY = 90 // ~1.5s of context for the adaptive threshold
 
-// Per-drum onset detection: spectral flux in the drum's home range with its own
-// adaptive threshold (mean + k·std), refractory and decay. Tuned for techno/EDM.
+// Per-drum onset detection: spectral flux in the drum's home range, normalized
+// by the band's current level (volume-independent), against a median+MAD
+// adaptive threshold (robust — the mean+std version drifted upward on every
+// loud section and started missing hits). Tuned for techno/EDM.
 type DrumKey = 'kick' | 'snare' | 'hat'
 const DRUMS: Record<DrumKey, {
   range: [number, number]
   refractoryS: number
   releaseMs: number
-  minFlux: number
+  /** noise gate: band must carry real energy for an onset to count */
+  minLevel: number
   kMul: number
 }> = {
-  kick: { range: [30, 120], refractoryS: 0.12, releaseMs: 180, minFlux: 0.015, kMul: 1.0 },
-  snare: { range: [700, 3500], refractoryS: 0.12, releaseMs: 150, minFlux: 0.012, kMul: 1.15 },
-  hat: { range: [6000, 14000], refractoryS: 0.055, releaseMs: 90, minFlux: 0.008, kMul: 1.05 }
+  kick: { range: [30, 120], refractoryS: 0.12, releaseMs: 180, minLevel: 0.04, kMul: 1.0 },
+  snare: { range: [700, 3500], refractoryS: 0.12, releaseMs: 150, minLevel: 0.03, kMul: 1.15 },
+  hat: { range: [6000, 14000], refractoryS: 0.055, releaseMs: 90, minLevel: 0.02, kMul: 1.05 }
 }
 
 interface OnsetState {
@@ -31,6 +34,16 @@ interface OnsetState {
   level: number
   fired: boolean
 }
+
+// --- tempo lock ------------------------------------------------------------
+// 4-on-floor music has a metronomic kick; once enough onsets agree on a period
+// the grid predicts every beat, and a kick the flux detector misses (masked by
+// a bassline, ducked by a limiter…) is filled in exactly on time.
+const BPM_MIN = 70
+const BPM_MAX = 190
+const GRID_HISTORY = 24
+/** fraction of intervals that must agree before the grid may fill beats */
+const GRID_CONFIDENT = 0.55
 
 export class AudioEngine {
   private ctx: AudioContext
@@ -56,9 +69,15 @@ export class AudioEngine {
     hat: { history: [], lastAt: -10, level: 0, fired: false }
   }
 
+  // tempo lock: real kick onset times → period estimate → predicted grid
+  private kickTimes: number[] = []
+  private gridPeriod = 0
+  private gridConfidence = 0
+  private nextGridBeat = 0
+
   readonly levels: AudioLevels = {
     sub: 0, bass: 0, mid: 0, treble: 0,
-    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0,
+    kick: 0, snare: 0, hat: 0, energy: 0, beat: 0, bpm: 0,
     onKick: false, onSnare: false, onHat: false, onBeat: false
   }
 
@@ -279,6 +298,9 @@ export class AudioEngine {
         o.level = this.follow(o.level, 0, { attackMs: 1, releaseMs: DRUMS[key].releaseMs }, dt)
         l[key] = o.level
       }
+      this.kickTimes.length = 0
+      this.gridConfidence = 0
+      l.bpm = 0
       l.energy = 0.25 * l.sub + 0.35 * l.bass + 0.25 * l.mid + 0.15 * l.treble
       l.beat = l.kick
       return l
@@ -299,6 +321,10 @@ export class AudioEngine {
       this.detectOnset(key, binHz, p.beatSensitivity, nowSec, dt)
       l[key] = this.onsets[key].level
     }
+    if (this.onsets.kick.fired) this.trackTempo(nowSec)
+    this.gridFillKick(nowSec)
+    l.bpm = this.gridConfidence >= GRID_CONFIDENT && this.gridPeriod > 0 ? 60 / this.gridPeriod : 0
+
     l.onKick = this.onsets.kick.fired
     l.onSnare = this.onsets.snare.fired
     l.onHat = this.onsets.hat.fired
@@ -309,21 +335,30 @@ export class AudioEngine {
     return l
   }
 
-  /** spectral flux in the drum's range vs its own adaptive threshold */
+  /** volume-normalized spectral flux vs a median+MAD adaptive threshold */
   private detectOnset(key: DrumKey, binHz: number, sensitivity: number, nowSec: number, dt: number): void {
     const cfg = DRUMS[key]
     const o = this.onsets[key]
     o.fired = false
 
-    const flux = this.spectralFlux(cfg.range[0], cfg.range[1], binHz)
+    const rawFlux = this.spectralFlux(cfg.range[0], cfg.range[1], binHz)
+    const bandLvl = this.bandLevel(cfg.range[0], cfg.range[1], binHz)
+    // normalize by the band's own loudness: a hit in a quiet mix scores like a
+    // hit in a slammed mix, and a sustained loud pad stops eating the threshold
+    const flux = rawFlux / (0.08 + bandLvl)
     o.history.push(flux)
     if (o.history.length > FLUX_HISTORY) o.history.shift()
 
-    if (o.history.length > 20) {
-      const mean = o.history.reduce((a, b) => a + b, 0) / o.history.length
-      const variance = o.history.reduce((a, b) => a + (b - mean) * (b - mean), 0) / o.history.length
-      const threshold = mean + sensitivity * cfg.kMul * Math.sqrt(variance)
-      if (flux > threshold && flux > cfg.minFlux && nowSec - o.lastAt > cfg.refractoryS) {
+    if (o.history.length > 24) {
+      const sorted = [...o.history].sort((a, b) => a - b)
+      const median = sorted[sorted.length >> 1]
+      const deviations = sorted.map((v) => Math.abs(v - median)).sort((a, b) => a - b)
+      const mad = deviations[deviations.length >> 1]
+      // 1.4826·MAD ≈ std for normal data, but immune to the outliers (the hits
+      // themselves) that used to inflate a mean+std threshold
+      const spread = Math.max(1.4826 * mad, 0.02)
+      const threshold = median + sensitivity * cfg.kMul * spread * 2.2
+      if (flux > threshold && bandLvl > cfg.minLevel && nowSec - o.lastAt > cfg.refractoryS) {
         o.lastAt = nowSec
         const intensity = Math.min((flux - threshold) / (threshold + 1e-6), 1)
         o.level = Math.max(o.level, 0.5 + 0.5 * intensity)
@@ -331,6 +366,54 @@ export class AudioEngine {
       }
     }
     o.level = this.follow(o.level, 0, { attackMs: 1, releaseMs: cfg.releaseMs }, dt)
+  }
+
+  /** fold kick inter-onset intervals into one beat period + confidence */
+  private trackTempo(nowSec: number): void {
+    const times = this.kickTimes
+    if (times.length > 0 && nowSec - times[times.length - 1] > 2.5) times.length = 0 // stale grid
+    times.push(nowSec)
+    if (times.length > GRID_HISTORY) times.shift()
+    if (times.length < 5) return
+
+    const pMin = 60 / BPM_MAX
+    const pMax = 60 / BPM_MIN
+    const folded: number[] = []
+    for (let i = 1; i < times.length; i++) {
+      let iv = times[i] - times[i - 1]
+      // halve/double into the plausible-tempo octave (missed beats → 2× gaps)
+      while (iv > pMax && iv / 2 >= pMin) iv /= 2
+      while (iv < pMin && iv * 2 <= pMax) iv *= 2
+      if (iv >= pMin && iv <= pMax) folded.push(iv)
+    }
+    if (folded.length < 4) return
+
+    // mode by clustering around the median, then average the cluster
+    folded.sort((a, b) => a - b)
+    const med = folded[folded.length >> 1]
+    const cluster = folded.filter((v) => Math.abs(v - med) < med * 0.06)
+    this.gridConfidence = cluster.length / folded.length
+    if (cluster.length >= 3) {
+      this.gridPeriod = cluster.reduce((a, b) => a + b, 0) / cluster.length
+      // re-phase on every real kick — drift never accumulates
+      this.nextGridBeat = nowSec + this.gridPeriod
+    }
+  }
+
+  /** confident grid + arrived beat time + real bass energy → fill the missed kick */
+  private gridFillKick(nowSec: number): void {
+    const o = this.onsets.kick
+    if (o.fired) return
+    if (this.gridConfidence < GRID_CONFIDENT || this.gridPeriod <= 0) return
+    const last = this.kickTimes[this.kickTimes.length - 1] ?? -10
+    // grid predicts, it doesn't freewheel: stop filling 2 bars after real kicks stop
+    if (nowSec - last > this.gridPeriod * 8) return
+    if (nowSec < this.nextGridBeat) return
+    this.nextGridBeat += this.gridPeriod
+    if (this.env.sub + this.env.bass < 0.08) return // break/drop-out — stay silent
+    o.lastAt = nowSec
+    o.level = Math.max(o.level, 0.7)
+    o.fired = true
   }
 
   private bandLevel(lo: number, hi: number, binHz: number): number {
