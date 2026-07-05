@@ -1,4 +1,4 @@
-import type { AppState, AudioLevels, NdiFrameMeta, NdiStatus, PresetEntry } from './params'
+import type { AppState, AudioLevels, NdiFrameMeta, NdiStatus, PresetEntry, SpoutStatus } from './params'
 import type { DeepPartial } from './merge'
 
 export type StatePatch = DeepPartial<AppState>
@@ -21,6 +21,7 @@ export const IPC = {
   ndiStop: 'ndi:stop',
   ndiStatus: 'ndi:status',
   ndiFrame: 'ndi:frame',
+  spoutStatus: 'spout:status',
   presetsAll: 'presets:all',
   presetsSave: 'presets:save',
   presetsDelete: 'presets:delete',
@@ -43,8 +44,9 @@ export interface LiquidApi {
   ndiStart(cfg: { name: string; width: number; height: number; fps: number }): Promise<{ ok: boolean; error?: string }>
   ndiStop(name: string): Promise<void>
   ndiStatus(): Promise<NdiStatus>
-  /** hot path — RGBA pixels straight out of readPixels (bottom-up) */
+  /** hot path — packed video frame; main routes it to NDI and/or Spout */
   ndiFrame(meta: NdiFrameMeta, data: Uint8Array): void
+  spoutStatus(): Promise<SpoutStatus>
   presetsAll(): Promise<PresetEntry[]>
   /** save-or-overwrite; returns the updated list */
   presetsSave(entry: PresetEntry): Promise<PresetEntry[]>

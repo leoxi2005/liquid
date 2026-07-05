@@ -180,6 +180,8 @@ export interface OutputParams {
   /** NDI video out (sender name "LIQUID") */
   ndi: boolean
   ndiFps: number
+  /** Spout out (Windows, same-machine GPU sharing) — senders "LIQUID" + "LIQUID FLOOR" */
+  spout: boolean
   /** preset switch fade time (seconds) */
   crossfadeSec: number
   floor: FloorParams
@@ -283,6 +285,7 @@ export const defaultState: AppState = {
     ndi: false,
     // 30 = full-load 60fps render on the reference M4 Max; 60 costs ~1/3 of it
     ndiFps: 30,
+    spout: false,
     crossfadeSec: 1.2,
     floor: {
       enabled: true,
@@ -325,6 +328,14 @@ export interface NdiFrameMeta {
   fps: number
   /** true = already BGRA top-down (GPU-packed) — skip the CPU conversion */
   packed?: boolean
+  /** false = spout-only tick (NDI runs at its own divided rate) */
+  toNdi?: boolean
+}
+
+export interface SpoutStatus {
+  available: boolean
+  loadError: string | null
+  senders: { name: string; frames: number }[]
 }
 
 export interface NdiStatus {

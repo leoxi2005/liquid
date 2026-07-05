@@ -42,6 +42,15 @@ jobs:
       - name: Verify NDI module loads
         run: node -e "const g = require('@stagetimerio/grandiose'); console.log('grandiose OK:', typeof g.send)"
 
+      # Spout sender addon (SpoutDX/D3D11, vendored SDK) — win-only native module
+      - name: Build Spout addon
+        working-directory: native/spout
+        run: npx node-gyp rebuild
+
+      - name: Verify Spout addon
+        shell: bash
+        run: ls -la native/spout/build/Release/spout_addon.node
+
       # --publish never: we upload to the release ourselves below
       - name: Build app
         run: npm run build:win -- --publish never

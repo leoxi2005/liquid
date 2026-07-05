@@ -290,6 +290,21 @@ export function buildPanel(env: PanelEnv): PanelHandle {
   bind(fOutput, output, 'customHeight', ['output'], { label: 'custom H', min: 256, max: 16384, step: 2 })
   bind(fOutput, output, 'ndi', ['output'], { label: 'NDI out ("LIQUID")' })
   bind(fOutput, output, 'ndiFps', ['output'], { label: 'NDI fps', options: { '60': 60, '30': 30 } })
+  bind(fOutput, output, 'spout', ['output'], { label: 'Spout out (Win, cùng máy)' })
+  const spoutInfo = { status: '—' }
+  fOutput.addBinding(spoutInfo, 'status', { readonly: true, label: 'Spout status', interval: 1000 })
+  window.setInterval(() => {
+    void window.liquid.spoutStatus().then((s) => {
+      if (!s.available) {
+        spoutInfo.status = s.loadError ?? 'không khả dụng'
+        return
+      }
+      spoutInfo.status =
+        s.senders.length === 0
+          ? 'sẵn sàng (đang tắt)'
+          : s.senders.map((e) => `● ${e.name}: ${e.frames}f`).join(' · ')
+    })
+  }, 2000)
   bind(fOutput, output, 'crossfadeSec', ['output'], { label: 'preset crossfade (s)', min: 0, max: 5, step: 0.1 })
 
   // --- floor: second sim + its own NDI sender -------------------------------------------

@@ -231,7 +231,7 @@ async function main(): Promise<void> {
   interface NdiReader {
     pbo: WebGLBuffer
     size: number
-    pending: { w: number; h: number } | null
+    pending: { w: number; h: number; toNdi: boolean } | null
     pixels: Uint8Array<ArrayBuffer> | null
   }
   const makeReader = (): NdiReader => ({ pbo: glc.gl.createBuffer()!, size: 0, pending: null, pixels: null })
@@ -242,18 +242,18 @@ async function main(): Promise<void> {
   const pumpReader = (reader: NdiReader, name: string): void => {
     if (!reader.pending) return
     const gl = glc.gl
-    const { w, h } = reader.pending
+    const { w, h, toNdi } = reader.pending
     reader.pending = null
     const bytes = w * h * 4
     if (!reader.pixels || reader.pixels.length !== bytes) reader.pixels = new Uint8Array(bytes)
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, reader.pbo)
     gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, reader.pixels)
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
-    window.liquid.ndiFrame({ name, width: w, height: h, fps: state.output.ndiFps, packed: true }, reader.pixels)
+    window.liquid.ndiFrame({ name, width: w, height: h, fps: state.output.ndiFps, packed: true, toNdi }, reader.pixels)
   }
 
   /** kick off an async read of `fbo` into the reader's PBO — no CPU wait */
-  const queueRead = (reader: NdiReader, fbo: FBO): void => {
+  const queueRead = (reader: NdiReader, fbo: FBO, toNdi: boolean): void => {
     const gl = glc.gl
     const bytes = fbo.width * fbo.height * 4
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbo.fbo)
@@ -264,7 +264,7 @@ async function main(): Promise<void> {
     }
     gl.readPixels(0, 0, fbo.width, fbo.height, gl.RGBA, gl.UNSIGNED_BYTE, 0)
     gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null)
-    reader.pending = { w: fbo.width, h: fbo.height }
+    reader.pending = { w: fbo.width, h: fbo.height, toNdi }
   }
 
   async function syncNdi(): Promise<void> {
@@ -320,26 +320,30 @@ async function main(): Promise<void> {
   }
 
   const captureNdiFrames = (): void => {
-    // divide the 60Hz loop down to the requested NDI rate
+    // NDI runs divided down to ndiFps; Spout (same-machine, cheap) gets every frame
     const divider = Math.max(1, Math.round(60 / Math.max(1, state.output.ndiFps)))
     ndiFrameCount++
-    if (ndiFrameCount % divider !== 0) return
+    const ndiTick = ndiFrameCount % divider === 0
+    const spoutOn = state.output.spout
+    if (!ndiTick && !spoutOn) return
     // ship what finished cooking last tick, then queue this tick's frame
     pumpReader(ndiMainReader, NDI_SENDER_NAME)
     pumpReader(ndiFloorReader, NDI_FLOOR_NAME)
-    if (ndiRunning.main && state.output.ndi && ndiSceneFbo) {
+    const mainToNdi = ndiTick && ndiRunning.main && state.output.ndi
+    if ((mainToNdi || spoutOn) && ndiSceneFbo) {
       ndiPackFbo = ensureByteFbo(ndiPackFbo, ndiSceneFbo.width, ndiSceneFbo.height)
       drawTex(ndiPackProgram, ndiSceneFbo, ndiPackFbo) // GPU flip + BGRA
-      queueRead(ndiMainReader, ndiPackFbo)
+      queueRead(ndiMainReader, ndiPackFbo, mainToNdi)
     }
-    if (ndiRunning.floor && state.output.floor.enabled && floorTarget) {
+    const floorToNdi = ndiTick && ndiRunning.floor
+    if ((floorToNdi || spoutOn) && state.output.floor.enabled && floorTarget) {
       // the pack pass doubles as the downscale — LINEAR sampling, one draw
       const scale = Math.min(Math.max(state.output.floor.ndiScale || 1, 0.25), 1)
       const fw = Math.max(2, Math.round((floorTarget.width * scale) / 2) * 2)
       const fh = Math.max(2, Math.round((floorTarget.height * scale) / 2) * 2)
       floorPackFbo = ensureByteFbo(floorPackFbo, fw, fh)
       drawTex(ndiPackProgram, floorTarget, floorPackFbo)
-      queueRead(ndiFloorReader, floorPackFbo)
+      queueRead(ndiFloorReader, floorPackFbo, floorToNdi)
     }
   }
 
@@ -686,7 +690,7 @@ async function main(): Promise<void> {
     if (floorOn() && floorTarget) {
       floorPost.render(floorSolver.dyeRead, floorSolver.velocityRead, state.visual, postEnv, floorTarget)
     }
-    if (ndiRunning.main && state.output.ndi) {
+    if ((ndiRunning.main && state.output.ndi) || state.output.spout) {
       // render offscreen so the GPU packer can sample it (the canvas' default
       // framebuffer isn't a texture), then mirror it onto the screen
       ndiSceneFbo = ensureByteFbo(ndiSceneFbo, canvas.width, canvas.height)
@@ -696,7 +700,7 @@ async function main(): Promise<void> {
       post.render(solver.dyeRead, solver.velocityRead, state.visual, postEnv)
     }
 
-    if (ndiRunning.main || ndiRunning.floor) captureNdiFrames()
+    if (ndiRunning.main || ndiRunning.floor || state.output.spout) captureNdiFrames()
     drawFloorPreview()
 
     fpsAccum += rawDt

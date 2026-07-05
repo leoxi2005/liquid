@@ -5,6 +5,7 @@ import { defaultState, type AppState, type NdiFrameMeta, type PresetEntry } from
 import { deepMerge } from '../shared/merge'
 import { IPC, type Action, type StatePatch } from '../shared/api'
 import * as ndi from './ndi'
+import * as spout from './spout'
 import * as persist from './persistence'
 
 // audio engine starts before any click — don't let Chromium suspend the AudioContext
@@ -80,6 +81,7 @@ ipcMain.on(IPC.fpsReport, (_e, fps: number) => {
 ipcMain.on(IPC.statePatch, (event, patch: StatePatch) => {
   state = deepMerge(state, patch)
   persist.scheduleSaveSettings(() => state)
+  if (patch.output?.spout === false) spout.stopAll()
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.webContents.id !== event.sender.id) {
       win.webContents.send(IPC.stateChanged, patch)
@@ -144,14 +146,17 @@ ipcMain.handle(IPC.ndiStop, (_e, name: string) => {
 })
 
 ipcMain.handle(IPC.ndiStatus, () => ndi.status())
+ipcMain.handle(IPC.spoutStatus, () => spout.status())
 
-// hot path: RGBA frame straight from the output renderer's readPixels
+// hot path: packed BGRA frame from the renderer — route to NDI and/or Spout
 ipcMain.on(IPC.ndiFrame, (_e, meta: NdiFrameMeta, data: Uint8Array) => {
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data.buffer ?? data)
-  ndi.sendFrame(meta, buf)
+  if (meta.toNdi !== false) ndi.sendFrame(meta, buf)
+  if (state.output.spout) spout.sendFrame(meta, buf)
 })
 
 app.on('before-quit', () => {
   ndi.stopAll()
+  spout.stopAll()
   persist.flushSettings(state)
 })

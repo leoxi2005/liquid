@@ -22,6 +22,7 @@ const api: LiquidApi = {
   ndiStop: (name) => ipcRenderer.invoke(IPC.ndiStop, name),
   ndiStatus: () => ipcRenderer.invoke(IPC.ndiStatus),
   ndiFrame: (meta, data) => ipcRenderer.send(IPC.ndiFrame, meta, data),
+  spoutStatus: () => ipcRenderer.invoke(IPC.spoutStatus),
   presetsAll: () => ipcRenderer.invoke(IPC.presetsAll),
   presetsSave: (entry: PresetEntry) => ipcRenderer.invoke(IPC.presetsSave, entry),
   presetsDelete: (name: string) => ipcRenderer.invoke(IPC.presetsDelete, name),
