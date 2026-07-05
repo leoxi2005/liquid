@@ -560,10 +560,10 @@ async function main(): Promise<void> {
       let targetSpeedMult = 1
       if (state.audio.source !== 'none' && speedMap.source !== 'none') {
         const lvl = Math.min(modLevel(speedMap), 1.3)
-        targetSpeedMult = 0.08 + Math.pow(lvl, 1.7) * 2.3
+        targetSpeedMult = 0.15 + Math.pow(lvl, 1.7) * 2.3
       }
-      // ~0.6s slew: quiet verse still crawls, drop still races, beats don't judder
-      smoothSpeedMult += (targetSpeedMult - smoothSpeedMult) * (1 - Math.exp(-dt / 0.6))
+      // short slew: quiet verse still crawls, drop still races, beats don't judder
+      smoothSpeedMult += (targetSpeedMult - smoothSpeedMult) * (1 - Math.exp(-dt / 0.35))
       const audioSpeedMult = smoothSpeedMult
 
       const fullRegion = [{ x0: 0, y0: 0, x1: 1, y1: 1 }]

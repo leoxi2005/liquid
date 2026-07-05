@@ -74,6 +74,9 @@ export class AudioEngine {
   private gridPeriod = 0
   private gridConfidence = 0
   private nextGridBeat = 0
+  // auto-gain for `energy`: normalize to the track's own rolling peak so a
+  // quietly-mixed input still swings the full 0–1 (drives the speed coupling)
+  private energyPeak = 0.15
 
   readonly levels: AudioLevels = {
     sub: 0, bass: 0, mid: 0, treble: 0,
@@ -328,8 +331,11 @@ export class AudioEngine {
     l.onKick = this.onsets.kick.fired
     l.onSnare = this.onsets.snare.fired
     l.onHat = this.onsets.hat.fired
-    // bass-weighted loudness: drives the global sim-speed coupling
-    l.energy = 0.25 * l.sub + 0.35 * l.bass + 0.25 * l.mid + 0.15 * l.treble
+    // bass-weighted loudness, auto-gained against the track's own peak —
+    // absolute input level stops deciding how "strong" the visuals feel
+    const rawEnergy = 0.25 * l.sub + 0.35 * l.bass + 0.25 * l.mid + 0.15 * l.treble
+    this.energyPeak = Math.max(this.energyPeak * Math.exp(-dt * 0.05), rawEnergy, 0.12)
+    l.energy = Math.min(rawEnergy / this.energyPeak, 1)
     l.beat = l.kick
     l.onBeat = l.onKick
     return l
