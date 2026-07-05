@@ -271,8 +271,8 @@ export const defaultState: AppState = {
     idleDrip: { enabled: true }
   },
   output: {
-    resolution: 'window',
-    customWidth: 1920,
+    resolution: 'custom',
+    customWidth: 2836,
     customHeight: 1080,
     ndi: false,
     ndiFps: 60,
