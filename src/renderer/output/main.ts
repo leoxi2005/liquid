@@ -499,6 +499,9 @@ async function main(): Promise<void> {
   let fpsAccum = 0
   let fpsFrames = 0
   let prevPaper = isPaperStyle()
+  // energy→speed follows the SECTION's loudness, not each kick — chasing the
+  // per-beat envelope made the whole sim visibly stutter on 4-on-floor music
+  let smoothSpeedMult = 1
 
   function frame(now: number): void {
     // export mode: deterministic fixed timestep, one PNG per sim frame
@@ -569,11 +572,14 @@ async function main(): Promise<void> {
       // simSpeed mapping couples tempo to loudness with heavy contrast:
       // silence ≈ frozen (×0.08 floor), pow-curve so loud sections visibly race
       const speedMap = state.mappings.simSpeed
-      let audioSpeedMult = 1
+      let targetSpeedMult = 1
       if (state.audio.source !== 'none' && speedMap.source !== 'none') {
         const lvl = Math.min(modLevel(speedMap), 1.3)
-        audioSpeedMult = 0.08 + Math.pow(lvl, 1.7) * 2.3
+        targetSpeedMult = 0.08 + Math.pow(lvl, 1.7) * 2.3
       }
+      // ~0.6s slew: quiet verse still crawls, drop still races, beats don't judder
+      smoothSpeedMult += (targetSpeedMult - smoothSpeedMult) * (1 - Math.exp(-dt / 0.6))
+      const audioSpeedMult = smoothSpeedMult
 
       // anchored drum hits fire on BOTH surfaces; the fluid between them is one
       const regions = views.floor
